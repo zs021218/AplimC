@@ -1,0 +1,28 @@
+stages:
+  preprocess_data:
+    cmd: python data/raw/polar_flu_data/preprocessing.py
+    deps:
+      - data/raw/polar_flu_data/preprocessing.py
+      - data/raw/polar_flu_data/CG.mat
+      - data/raw/polar_flu_data/IG.mat
+      - data/raw/polar_flu_data/PS3.mat
+      - data/raw/polar_flu_data/PS6.mat
+      - data/raw/polar_flu_data/PS10.mat
+      - data/raw/polar_flu_data/QDDB.mat
+      - data/raw/polar_flu_data/QZQG.mat
+      - data/raw/polar_flu_data/SG.mat
+      - data/raw/polar_flu_data/TP.mat
+      - data/raw/polar_flu_data/TS.mat
+      - data/raw/polar_flu_data/YMXH.mat
+      - data/raw/polar_flu_data/YXXB.mat
+      - data/raw/images/
+    outs:
+      - data/processed/signal_data.npz
+      - data/processed/image_data.npz
+      - data/processed/multimodal_data.npz
+      - data/processed/metadata.json
+    params:
+      - preprocess.signal_length
+      - preprocess.rows_per_sample
+      - preprocess.image_size
+      - preprocess.num_views

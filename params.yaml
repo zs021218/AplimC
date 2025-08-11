@@ -1,0 +1,11 @@
+preprocess:
+  signal_length: 4000
+  rows_per_sample: 20
+  image_size: [224, 224]
+  num_views: 3
+  wavelengths: [445, 473, 520, 630]
+
+paths:
+  raw_data: '/data3/zs/AplimC/raw/polar_flu_data'
+  image_data: '/data3/zs/AplimC/data/raw/images'
+  output: '/data3/zs/AplimC/processed'
