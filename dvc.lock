@@ -1,0 +1,87 @@
+schema: '2.0'
+stages:
+  preprocess_data:
+    cmd: python data/raw/polar_flu_data/preprocessing.py
+    deps:
+    - path: data/raw/images/
+      hash: md5
+      md5: 145b1efa8eb919bf128bf0035460818a.dir
+      size: 73512139268
+      nfiles: 63030
+    - path: data/raw/polar_flu_data/CG.mat
+      hash: md5
+      md5: 3be71b6a144ec075185e13ad596a58f9
+      size: 23315114
+    - path: data/raw/polar_flu_data/IG.mat
+      hash: md5
+      md5: 6eab56c55ac941145729abd08a78be16
+      size: 21158598
+    - path: data/raw/polar_flu_data/PS10.mat
+      hash: md5
+      md5: 1ad5941aa9bd32d9c2c65843dd88ee38
+      size: 13250797
+    - path: data/raw/polar_flu_data/PS3.mat
+      hash: md5
+      md5: 76619b7236133246634711969775efc8
+      size: 10497389
+    - path: data/raw/polar_flu_data/PS6.mat
+      hash: md5
+      md5: bb6c0be8781014a3d2906bdf9513ac14
+      size: 13376749
+    - path: data/raw/polar_flu_data/QDDB.mat
+      hash: md5
+      md5: 6a424238ba9d22a59347070b54989b7a
+      size: 16331817
+    - path: data/raw/polar_flu_data/QZQG.mat
+      hash: md5
+      md5: cdf1c25f9ad79db8b0197e575c856b0e
+      size: 12930252
+    - path: data/raw/polar_flu_data/SG.mat
+      hash: md5
+      md5: fab3c397767bc8ebf6a66d75c360b137
+      size: 8592050
+    - path: data/raw/polar_flu_data/TP.mat
+      hash: md5
+      md5: aee007cc03bb5eae4db10b6afd83b255
+      size: 17892571
+    - path: data/raw/polar_flu_data/TS.mat
+      hash: md5
+      md5: cf8977b2d5ac1687883404f983a023bf
+      size: 19200343
+    - path: data/raw/polar_flu_data/YMXH.mat
+      hash: md5
+      md5: 24016ee1c46bfc8e47d03c5129f06f06
+      size: 20372237
+    - path: data/raw/polar_flu_data/YXXB.mat
+      hash: md5
+      md5: 41188ca59dcb4eb9f1bd275efbe3919c
+      size: 16988644
+    - path: data/raw/polar_flu_data/preprocessing.py
+      hash: md5
+      md5: f5d05b90f60115f2fae25fbe993fb3a5
+      size: 24126
+    params:
+      params.yaml:
+        preprocess.image_size:
+        - 224
+        - 224
+        preprocess.num_views: 3
+        preprocess.rows_per_sample: 20
+        preprocess.signal_length: 4000
+    outs:
+    - path: data/processed/image_data.npz
+      hash: md5
+      md5: 2c6a306e0adf8824419027416c4eefa8
+      size: 6402695215
+    - path: data/processed/metadata.json
+      hash: md5
+      md5: 813accba6138f9ebdfa2e76ff405ad86
+      size: 842
+    - path: data/processed/multimodal_data.npz
+      hash: md5
+      md5: 712e30419f79bbc79f989a9a0fa52e52
+      size: 6573775499
+    - path: data/processed/signal_data.npz
+      hash: md5
+      md5: f528956b6bf3621d1fbd8805814c2607
+      size: 171078553
