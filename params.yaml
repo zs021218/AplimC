@@ -5,7 +5,21 @@ preprocess:
   num_views: 3
   wavelengths: [445, 473, 520, 630]
 
+split:
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  random_state: 42
+  stratified: true
+
 paths:
-  raw_data: '/data3/zs/AplimC/raw/polar_flu_data'
+  raw_data: '/data3/zs/AplimC/data/raw/polar_flu_data'
   image_data: '/data3/zs/AplimC/data/raw/images'
-  output: '/data3/zs/AplimC/processed'
+  output: '/data3/zs/AplimC/data/processed'
+
+# 可选的数据增强参数
+augmentation:
+  enable: false
+  rotation_range: 10
+  brightness_range: 0.2
+  contrast_range: 0.2

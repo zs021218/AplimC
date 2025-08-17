@@ -16,13 +16,33 @@ stages:
       - data/raw/polar_flu_data/YMXH.mat
       - data/raw/polar_flu_data/YXXB.mat
       - data/raw/images/
+      - params.yaml
     outs:
+      # 分割后的数据集
+      - data/processed/multimodal_data_train.npz
+      - data/processed/multimodal_data_val.npz
+      - data/processed/multimodal_data_test.npz
+      # 分割后的元数据
+      - data/processed/metadata_train.json
+      - data/processed/metadata_val.json
+      - data/processed/metadata_test.json
+      # 分割索引
+      - data/processed/split_indices.json
+      # 完整数据集（可选）
+      - data/processed/multimodal_data_full.npz
+      # 原有的兼容文件
       - data/processed/signal_data.npz
       - data/processed/image_data.npz
-      - data/processed/multimodal_data.npz
       - data/processed/metadata.json
     params:
       - preprocess.signal_length
       - preprocess.rows_per_sample
       - preprocess.image_size
       - preprocess.num_views
+      - preprocess.wavelengths
+      - split.train_ratio
+      - split.val_ratio
+      - split.test_ratio
+      - split.random_state
+    metrics:
+      - data/processed/split_statistics.json
