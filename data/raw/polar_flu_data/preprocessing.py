@@ -6,6 +6,7 @@ from PIL import Image
 import cv2
 from typing import Dict, List, Tuple, Optional, Any
 import yaml
+from sklearn.model_selection import train_test_split
 
 class MultimodalPolarFluDataPreprocessor:
     def __init__(self, raw_data_path, image_data_path, output_path):
@@ -345,8 +346,9 @@ class MultimodalPolarFluDataPreprocessor:
             'class_name': class_name
         }
         
-    def preprocess_all_classes(self):
-        """预处理所有类别的多模态数据"""
+    def preprocess_all_classes(self, save_splits=True, **split_kwargs):
+        """预处理所有类别的多模态数据并分割数据集"""
+        # 原有的数据处理逻辑
         all_stokes = []
         all_fluorescence = []
         all_images = []
@@ -381,19 +383,10 @@ class MultimodalPolarFluDataPreprocessor:
             print(f"数据合并失败: {e}")
             return None
 
-        print(f"\n{'='*60}")
-        print(f"多模态数据合并完成")
-        print(f"{'='*60}")
-        print(f"总样本数: {len(all_stokes)}")
-        print(f"Stokes数据形状: {all_stokes.shape}")
-        print(f"荧光数据形状: {all_fluorescence.shape}")
-        print(f"图像数据形状: {all_images.shape}")
-        print(f"标签形状: {all_labels.shape}")
-
         # 验证多模态数据一致性
         self.validate_multimodal_consistency(all_stokes, all_fluorescence, all_images, all_labels)
 
-        # 返回多模态数据集
+        # 创建完整数据集
         dataset = {
             'stokes': all_stokes,
             'fluorescence': all_fluorescence,
@@ -408,7 +401,131 @@ class MultimodalPolarFluDataPreprocessor:
             'num_views': self.num_views
         }
 
-        return dataset
+        if save_splits:
+            # 分割数据集
+            splits = self.split_dataset(dataset, **split_kwargs)
+            
+            # 保存分割后的数据集
+            self.save_split_datasets(splits)
+            
+            # 也保存完整数据集（可选）
+            self.save_dataset(dataset, 'multimodal_data_full.npz')
+            
+            return dataset, splits
+        else:
+            return dataset
+
+    def split_dataset(self, dataset, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15, random_state=42):
+        """在预处理阶段分割数据集"""
+        print(f"\n{'='*50}")
+        print("数据集分割")
+        print(f"{'='*50}")
+        
+        # 验证比例
+        assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "比例之和必须等于1"
+        
+        total_samples = len(dataset['labels'])
+        labels = dataset['labels']
+        indices = np.arange(total_samples)
+        
+        # 第一次分割: 训练集 vs (验证集+测试集)
+        train_indices, temp_indices = train_test_split(
+            indices, 
+            test_size=(val_ratio + test_ratio),
+            stratify=labels,
+            random_state=random_state
+        )
+        
+        # 第二次分割: 验证集 vs 测试集
+        val_indices, test_indices = train_test_split(
+            temp_indices,
+            test_size=test_ratio / (val_ratio + test_ratio),
+            stratify=labels[temp_indices],
+            random_state=random_state
+        )
+        
+        # 创建分割后的数据集
+        splits = {
+            'train': self._create_split_dataset(dataset, train_indices),
+            'val': self._create_split_dataset(dataset, val_indices),
+            'test': self._create_split_dataset(dataset, test_indices)
+        }
+        
+        # 打印分割统计信息
+        self._print_split_statistics(splits, dataset['class_map'])
+        
+        return splits
+    
+    def _create_split_dataset(self, dataset, indices):
+        """根据索引创建数据集分割"""
+        return {
+            'stokes': dataset['stokes'][indices],
+            'fluorescence': dataset['fluorescence'][indices],
+            'images': dataset['images'][indices],
+            'labels': dataset['labels'][indices],
+            'indices': indices  # 保存原始索引用于调试
+        }
+    
+    def _print_split_statistics(self, splits, class_map):
+        """打印数据集分割统计信息"""
+        print(f"\n数据集分割统计:")
+        print(f"{'='*60}")
+        
+        for split_name, split_data in splits.items():
+            labels = split_data['labels']
+            total = len(labels)
+            
+            print(f"\n{split_name.upper()}集: {total} 样本")
+            print("-" * 30)
+            
+            # 统计各类别样本数
+            for class_name, class_label in class_map.items():
+                count = np.sum(labels == class_label)
+                percentage = count / total * 100 if total > 0 else 0
+                print(f"  {class_name}: {count} 样本 ({percentage:.1f}%)")
+    
+    def save_split_datasets(self, splits, base_filename='multimodal_data'):
+        """保存分割后的数据集"""
+        print(f"\n{'='*50}")
+        print("保存分割数据集")
+        print(f"{'='*50}")
+        
+        for split_name, split_data in splits.items():
+            # 保存完整分割数据
+            split_path = self.output_path / f'{base_filename}_{split_name}.npz'
+            
+            # 移除索引信息（仅用于内部）
+            save_data = {k: v for k, v in split_data.items() if k != 'indices'}
+            
+            np.savez_compressed(split_path, **save_data)
+            print(f"{split_name}集已保存到: {split_path}")
+            
+            # 保存分割的元数据
+            split_metadata = {
+                'split': split_name,
+                'total_samples': len(split_data['labels']),
+                'data_shapes': {
+                    'stokes': list(split_data['stokes'].shape),
+                    'fluorescence': list(split_data['fluorescence'].shape),
+                    'images': list(split_data['images'].shape),
+                    'labels': list(split_data['labels'].shape)
+                }
+            }
+            
+            metadata_path = self.output_path / f'metadata_{split_name}.json'
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(split_metadata, f, indent=2, ensure_ascii=False)
+        
+        # 保存分割索引信息（用于重现性和调试）
+        split_indices = {
+            split_name: split_data['indices'].tolist() 
+            for split_name, split_data in splits.items()
+        }
+        
+        indices_path = self.output_path / 'split_indices.json'
+        with open(indices_path, 'w') as f:
+            json.dump(split_indices, f, indent=2)
+        print(f"分割索引已保存到: {indices_path}")
 
     def validate_multimodal_consistency(self, stokes_data, fluorescence_data, image_data, labels):
         """验证多模态数据的一致性"""
@@ -566,6 +683,33 @@ class MultimodalPolarFluDataPreprocessor:
             print(f"加载参数文件失败: {e}")
             return None
 
+    def generate_split_metrics(self, splits, class_map, metrics_path=None):
+        """生成分割统计信息并保存为JSON（用于DVC metrics）"""
+        metrics = {}
+        for split_name, split_data in splits.items():
+            labels = split_data['labels']
+            total = len(labels)
+            split_stats = {}
+            for class_name, class_label in class_map.items():
+                count = int(np.sum(labels == class_label))
+                percentage = float(count / total * 100) if total > 0 else 0.0
+                split_stats[class_name] = {
+                    'label': class_label,
+                    'count': count,
+                    'percentage': percentage
+                }
+            metrics[split_name] = {
+                'total_samples': total,
+                'class_stats': split_stats
+            }
+        # 保存到JSON文件（可选）
+        if metrics_path is None:
+            metrics_path = self.output_path / 'split_metrics.json'
+        with open(metrics_path, 'w', encoding='utf-8') as f:
+            json.dump(metrics, f, indent=2, ensure_ascii=False)
+        print(f"分割统计信息已保存到: {metrics_path}")
+        return metrics
+
 def main():
     # 加载参数
     params = MultimodalPolarFluDataPreprocessor.load_params()
@@ -575,14 +719,18 @@ def main():
         image_data_path = Path(params['paths']['image_data'])
         output_path = Path(params['paths']['output'])
         
-        # 可以使用参数覆盖默认值
-        signal_length = params['preprocess']['signal_length']
-        rows_per_sample = params['preprocess']['rows_per_sample']
+        # 分割参数
+        split_params = params.get('split', {})
+        train_ratio = split_params.get('train_ratio', 0.7)
+        val_ratio = split_params.get('val_ratio', 0.15)
+        test_ratio = split_params.get('test_ratio', 0.15)
+        random_state = split_params.get('random_state', 42)
     else:
-        # 使用默认路径
+        # 使用默认参数
         raw_data_path = Path('/data3/zs/Multimodel_fusion/raw_data/polar_flu_data')
         image_data_path = Path('/data3/zs/AplimC/data/raw/images')
         output_path = Path('/data3/zs/Multimodel_fusion/processed_data')
+        train_ratio, val_ratio, test_ratio, random_state = 0.7, 0.15, 0.15, 42
 
     # 创建多模态预处理器实例
     preprocessor = MultimodalPolarFluDataPreprocessor(
@@ -593,38 +741,28 @@ def main():
 
     # 如果有参数，更新配置
     if params:
-        preprocessor.signal_length = params['preprocess']['signal_length']
-        preprocessor.rows_per_sample = params['preprocess']['rows_per_sample']
-        preprocessor.image_size = tuple(params['preprocess']['image_size'])
-        preprocessor.num_views = params['preprocess']['num_views']
-        preprocessor.wavelengths = params['preprocess']['wavelengths']
+        preprocess_params = params.get('preprocess', {})
+        preprocessor.signal_length = preprocess_params.get('signal_length', 4000)
+        preprocessor.rows_per_sample = preprocess_params.get('rows_per_sample', 20)
+        preprocessor.image_size = tuple(preprocess_params.get('image_size', [224, 224]))
+        preprocessor.num_views = preprocess_params.get('num_views', 3)
+        preprocessor.wavelengths = preprocess_params.get('wavelengths', [445, 473, 520, 630])
 
-    # 处理所有类别数据
+    # 处理所有类别数据并分割
     print("开始多模态数据预处理...")
-    dataset = preprocessor.preprocess_all_classes()
-
-    if dataset is not None:
-        # 获取统计信息
-        stats = preprocessor.get_label_statistics(dataset['labels'])
-        print(f"\n多模态数据集统计信息:")
-        for class_name, info in stats.items():
-            print(f"{class_name}: {info['count']} 样本 ({info['percentage']:.1f}%)")
-
-        # 保存数据集
-        preprocessor.save_dataset(dataset)
-
-        print(f"\n多模态数据预处理完成!")
-        print(f"Stokes数据形状: {dataset['stokes'].shape}")
-        print(f"荧光数据形状: {dataset['fluorescence'].shape}")
-        print(f"图像数据形状: {dataset['images'].shape}")
-        print(f"标签形状: {dataset['labels'].shape}")
-        
-        # 数据一致性最终检查
-        print(f"\n最终一致性检查:")
-        all_lengths = [len(dataset['stokes']), len(dataset['fluorescence']), len(dataset['images']), len(dataset['labels'])]
-        print(f"所有模态样本数是否一致: {len(set(all_lengths)) == 1}")
-    else:
-        print("多模态数据预处理失败!")
-
+    result = preprocessor.preprocess_all_classes(
+        save_splits=True,
+        train_ratio=train_ratio,
+        val_ratio=val_ratio,
+        test_ratio=test_ratio,
+        random_state=random_state
+    )
+    
+    # 生成分割统计信息（用于DVC metrics）
+    if result is not None and isinstance(result, tuple):
+        dataset, splits = result
+        preprocessor.generate_split_metrics(splits, dataset['class_map'])
+    
 if __name__ == "__main__":
     main()
+    print("多模态数据预处理完成。")
