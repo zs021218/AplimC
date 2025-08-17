@@ -7,6 +7,11 @@ import cv2
 from typing import Dict, List, Tuple, Optional, Any
 import yaml
 from sklearn.model_selection import train_test_split
+import gc
+import psutil
+import os
+import re
+import shutil
 
 class MultimodalPolarFluDataPreprocessor:
     def __init__(self, raw_data_path, image_data_path, output_path):
@@ -47,6 +52,13 @@ class MultimodalPolarFluDataPreprocessor:
 
         # 波长信息
         self.wavelengths = [445, 473, 520, 630]
+        
+        # 内存优化参数
+        self.batch_size = 50  # 图像批处理大小
+        self.use_float32 = True  # 强制使用float32节省内存
+        self.memory_threshold = 0.85  # 内存使用阈值
+        self.temp_dir = self.output_path / 'temp'
+        self.temp_dir.mkdir(exist_ok=True)
 
     def get_class_name(self, label):
         """根据标签获取类别名称"""
@@ -55,35 +67,47 @@ class MultimodalPolarFluDataPreprocessor:
     def get_class_label(self, class_name):
         """根据类别名称获取标签"""
         return self.class_map.get(class_name, -1)
+    
+    def check_memory_usage(self):
+        """检查内存使用情况"""
+        process = psutil.Process(os.getpid())
+        memory_percent = process.memory_percent()
+        if memory_percent > self.memory_threshold * 100:
+            print(f"警告: 内存使用率达到 {memory_percent:.1f}%，触发垃圾回收")
+            gc.collect()
+            return True
+        return False
         
     def load_mat_file(self, mat_path):
-        """加载 MATLAB 文件"""
+        """加载 MATLAB 文件（内存优化版本）"""
         try:
+            print(f"加载文件: {mat_path}")
             with h5py.File(mat_path, 'r') as f:
                 data_keys = [k for k in f.keys() if not k.startswith('#')]
-                mat_data = {}
                 
-                for key in data_keys:
-                    if isinstance(f[key], h5py.Dataset):
-                        data = f[key][()]
-                        if len(data.shape) == 2:
-                            data = data.T
-                        mat_data[key] = data
+                if not data_keys:
+                    print("未找到有效数据键")
+                    return None
                 
                 print(f"使用 h5py 读取，找到数据键: {data_keys}")
                 
-                if data_keys:
-                    return mat_data[data_keys[0]]
-                else:
-                    print("未找到有效数据键")
-                    return None
+                # 读取数据并立即转换为指定精度
+                data = f[data_keys[0]][()]
+                if len(data.shape) == 2:
+                    data = data.T
+                
+                # 转换为float32节省内存
+                data = data.astype(np.float32)
+                
+                print(f"数据形状: {data.shape}, 数据类型: {data.dtype}")
+                return data
                     
         except Exception as e:
             print(f"加载文件失败 {mat_path}: {e}")
             return None
             
     def extract_signal_samples(self, data):
-        """从数据中提取信号样本"""
+        """从数据中提取信号样本（内存优化版本）"""
         if data is None:
             return None, None
             
@@ -101,41 +125,55 @@ class MultimodalPolarFluDataPreprocessor:
             print("警告: 数据行数不足以提取样本")
             return None, None
         
-        # 初始化数组 
-        stokes_data = np.zeros((num_samples, 4, cols))
-        fluorescence_data = np.zeros((num_samples, 16, cols))
+        # 使用float32初始化数组
+        stokes_data = np.zeros((num_samples, 4, cols), dtype=np.float32)
+        fluorescence_data = np.zeros((num_samples, 16, cols), dtype=np.float32)
 
-        for sample_idx in range(num_samples):
-            start_row = sample_idx * self.rows_per_sample
-            end_row = start_row + self.rows_per_sample
+        # 分批处理样本以节省内存
+        batch_size = min(self.batch_size, num_samples)
+        
+        for batch_start in range(0, num_samples, batch_size):
+            batch_end = min(batch_start + batch_size, num_samples)
             
-            if end_row > rows:
-                print(f"警告: 样本 {sample_idx} 数据不完整")
-                break
+            for sample_idx in range(batch_start, batch_end):
+                start_row = sample_idx * self.rows_per_sample
+                end_row = start_row + self.rows_per_sample
                 
-            sample_data = data[start_row:end_row, :]
+                if end_row > rows:
+                    print(f"警告: 样本 {sample_idx} 数据不完整")
+                    break
+                    
+                sample_data = data[start_row:end_row, :]
 
-            # Stokes 参数 (前4行)
-            stokes_data[sample_idx] = sample_data[0:4, :]
+                # Stokes 参数 (前4行)
+                stokes_data[sample_idx] = sample_data[0:4, :].astype(np.float32)
 
-            # 荧光数据 (5-20行，共16个通道)
-            fluorescence_data[sample_idx] = sample_data[4:20, :]
+                # 荧光数据 (5-20行，共16个通道)
+                fluorescence_data[sample_idx] = sample_data[4:20, :].astype(np.float32)
+            
+            # 批次处理完后检查内存
+            if batch_end % 100 == 0:
+                self.check_memory_usage()
+                gc.collect()
 
         return stokes_data[:sample_idx+1], fluorescence_data[:sample_idx+1]
 
     def load_and_preprocess_image(self, image_path: Path) -> Optional[np.ndarray]:
-        """加载并预处理单张图像"""
+        """加载并预处理单张图像（内存优化版本）"""
         try:
             # 使用PIL加载图像
-            image = Image.open(image_path).convert('RGB')
-            
-            # 调整尺寸
-            image = image.resize(self.image_size, Image.Resampling.LANCZOS)
-            
-            # 转换为numpy数组并归一化到[0,1]
-            image_array = np.array(image, dtype=np.float32) / 255.0
-            
-            return image_array
+            with Image.open(image_path) as image:
+                # 转换为RGB（如果需要）
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+                
+                # 调整尺寸
+                image = image.resize(self.image_size, Image.Resampling.LANCZOS)
+                
+                # 转换为numpy数组并归一化到[0,1]
+                image_array = np.array(image, dtype=np.float32) / 255.0
+                
+                return image_array
             
         except Exception as e:
             print(f"加载图像失败 {image_path}: {e}")
@@ -216,7 +254,7 @@ class MultimodalPolarFluDataPreprocessor:
         return int(numbers[0]) if numbers else 0
 
     def process_class_images(self, class_name: str) -> Optional[np.ndarray]:
-        """处理指定类别的所有图像"""
+        """处理指定类别的所有图像（内存优化版本）"""
         print(f"\n处理 {class_name} 类别图像:")
         
         # 获取视图目录
@@ -230,32 +268,52 @@ class MultimodalPolarFluDataPreprocessor:
             print(f"类别 {class_name} 没有有效的图像样本")
             return None
         
-        # 预处理所有图像样本
-        processed_samples = []
-        for sample_idx, sample_views in enumerate(sample_images):
-            processed_views = []
-            
-            for view_idx, image_path in enumerate(sample_views):
-                processed_image = self.load_and_preprocess_image(image_path)
-                if processed_image is None:
-                    print(f"跳过样本 {sample_idx + 1}，视图 {view_idx + 1} 加载失败: {image_path}")
-                    break
-                processed_views.append(processed_image)
-            
-            # 确保所有视图都成功加载
-            if len(processed_views) == len(sample_views):
-                # 堆叠为 (num_views, H, W, C)
-                sample_array = np.stack(processed_views, axis=0)
-                processed_samples.append(sample_array)
-            else:
-                print(f"跳过样本 {sample_idx + 1}，部分视图加载失败")
+        num_samples = len(sample_images)
         
-        if not processed_samples:
+        # 预分配内存
+        all_samples = np.zeros((num_samples, self.num_views, *self.image_size, 3), dtype=np.float32)
+        
+        # 分批处理图像以节省内存
+        batch_size = min(self.batch_size, num_samples)
+        processed_count = 0
+        
+        for batch_start in range(0, num_samples, batch_size):
+            batch_end = min(batch_start + batch_size, num_samples)
+            print(f"处理图像批次 {batch_start+1}-{batch_end}/{num_samples}")
+            
+            batch_processed = 0
+            for sample_idx in range(batch_start, batch_end):
+                sample_views = sample_images[sample_idx]
+                views_loaded = 0
+                
+                for view_idx, image_path in enumerate(sample_views):
+                    processed_image = self.load_and_preprocess_image(image_path)
+                    if processed_image is not None:
+                        all_samples[sample_idx, view_idx] = processed_image
+                        views_loaded += 1
+                    else:
+                        print(f"警告: 无法处理图像 {image_path}")
+                
+                # 只有当所有视图都成功加载时才计数
+                if views_loaded == len(sample_views):
+                    batch_processed += 1
+                    processed_count += 1
+                else:
+                    print(f"跳过样本 {sample_idx + 1}，部分视图加载失败")
+            
+            # 强制垃圾回收
+            gc.collect()
+            
+            # 检查内存使用
+            if self.check_memory_usage():
+                print(f"内存使用过高，已触发垃圾回收")
+        
+        if processed_count == 0:
             print(f"类别 {class_name} 没有成功处理的图像样本")
             return None
         
-        # 合并所有样本: (num_samples, num_views, H, W, C)
-        all_samples = np.stack(processed_samples, axis=0)
+        # 只返回成功处理的样本
+        all_samples = all_samples[:processed_count]
         print(f"类别 {class_name} 图像数据形状: {all_samples.shape}")
         
         return all_samples
@@ -287,8 +345,100 @@ class MultimodalPolarFluDataPreprocessor:
         
         return aligned_stokes, aligned_fluorescence, aligned_images
 
+    def _create_split_dataset(self, dataset, indices):
+        """根据索引创建数据集分割（已弃用，使用内存优化版本）"""
+        return {
+            'stokes': dataset['stokes'][indices],
+            'fluorescence': dataset['fluorescence'][indices],
+            'images': dataset['images'][indices],
+            'labels': dataset['labels'][indices],
+            'indices': indices  # 保存原始索引用于调试
+        }
+
+    def _merge_class_data_files_streaming(self, class_data_files, sample_counts, save_splits, **split_kwargs):
+        """流式合并类别数据文件 - 完全避免在内存中保存完整数据集"""
+        total_samples = sum(count for _, _, count in class_data_files)
+        
+        print(f"准备流式合并 {len(class_data_files)} 个类别，总样本数: {total_samples}")
+        
+        # 先生成分割索引
+        print("生成分割索引...")
+        all_labels = []
+        current_idx = 0
+        
+        # 收集所有标签以生成分层分割
+        for temp_file, class_name, count in class_data_files:
+            with np.load(temp_file) as data:
+                all_labels.append(data['labels'])
+        
+        all_labels = np.concatenate(all_labels)
+        indices = np.arange(total_samples)
+        
+        # 生成分割索引
+        train_ratio = split_kwargs.get('train_ratio', 0.7)
+        val_ratio = split_kwargs.get('val_ratio', 0.15)
+        test_ratio = split_kwargs.get('test_ratio', 0.15)
+        random_state = split_kwargs.get('random_state', 42)
+        
+        train_indices, temp_indices = train_test_split(
+            indices, 
+            test_size=(val_ratio + test_ratio),
+            stratify=all_labels,
+            random_state=random_state
+        )
+        
+        val_indices, test_indices = train_test_split(
+            temp_indices,
+            test_size=test_ratio / (val_ratio + test_ratio),
+            stratify=all_labels[temp_indices],
+            random_state=random_state
+        )
+        
+        # 保存分割索引
+        split_indices = {
+            'train': train_indices.tolist(),
+            'val': val_indices.tolist(),
+            'test': test_indices.tolist()
+        }
+        indices_path = self.output_path / 'split_indices.json'
+        with open(indices_path, 'w') as f:
+            json.dump(split_indices, f, indent=2)
+        print(f"分割索引已保存到: {indices_path}")
+        
+        # 释放标签内存
+        del all_labels
+        gc.collect()
+        
+        if save_splits:
+            # 流式创建分割数据集
+            self._create_splits_streaming(class_data_files, 
+                                        {'train': train_indices, 'val': val_indices, 'test': test_indices})
+            
+            # 生成统计信息
+            splits_info = self._generate_splits_info(class_data_files, 
+                                                   {'train': train_indices, 'val': val_indices, 'test': test_indices})
+            
+            # 清理临时文件
+            self._cleanup_temp_files(class_data_files)
+            
+            # 创建简化的数据集信息
+            dataset_info = {
+                'class_map': self.class_map,
+                'inverse_class_map': self.inverse_class_map,
+                'sample_counts': sample_counts,
+                'wavelengths': self.wavelengths,
+                'signal_length': self.signal_length,
+                'image_size': self.image_size,
+                'num_views': self.num_views,
+                'total_samples': total_samples
+            }
+            
+            return dataset_info, splits_info
+        
+        return None
+
     def process_class_data(self, class_name):
-        """处理特定类别的多模态数据"""
+        """处理特定类别的多模态数据（内存优化版本）"""
         print(f"\n{'='*60}")
         print(f"处理 {class_name} 类别多模态数据")
         print(f"{'='*60}")
@@ -306,6 +456,11 @@ class MultimodalPolarFluDataPreprocessor:
             return None
 
         stokes_data, fluorescence_data = self.extract_signal_samples(signal_data)
+        
+        # 立即释放原始信号数据内存
+        del signal_data
+        gc.collect()
+        
         if stokes_data is None or fluorescence_data is None:
             print(f"无法从 {mat_file.name} 提取信号样本")
             return None
@@ -313,10 +468,18 @@ class MultimodalPolarFluDataPreprocessor:
         # 2. 处理图像数据
         image_data = self.process_class_images(class_name)
         
+        if image_data is None:
+            print(f"类别 {class_name} 图像处理失败")
+            return None
+        
         # 3. 数据对齐
         aligned_stokes, aligned_fluorescence, aligned_images = self.align_multimodal_data(
             stokes_data, fluorescence_data, image_data, class_name
         )
+        
+        # 释放未对齐的数据
+        del stokes_data, fluorescence_data, image_data
+        gc.collect()
         
         if aligned_stokes is None:
             print(f"类别 {class_name} 数据对齐失败")
@@ -337,6 +500,9 @@ class MultimodalPolarFluDataPreprocessor:
         print(f"  Stokes数据形状: {aligned_stokes.shape}")
         print(f"  荧光数据形状: {aligned_fluorescence.shape}")
         print(f"  图像数据形状: {aligned_images.shape}")
+        
+        # 最后检查内存使用
+        self.check_memory_usage()
 
         return {
             'stokes': aligned_stokes,
@@ -346,79 +512,333 @@ class MultimodalPolarFluDataPreprocessor:
             'class_name': class_name
         }
         
-    def preprocess_all_classes(self, save_splits=True, **split_kwargs):
-        """预处理所有类别的多模态数据并分割数据集"""
-        # 原有的数据处理逻辑
-        all_stokes = []
-        all_fluorescence = []
-        all_images = []
-        all_labels = []
+    def preprocess_all_classes_memory_efficient(self, save_splits=True, **split_kwargs):
+        """内存高效的全类别预处理 - 分类别处理避免内存溢出"""
+        print(f"开始处理 {len(self.class_map)} 个类别的多模态数据（内存优化版本）...")
+
+        # 分别保存每个类别的数据，避免同时加载所有数据
+        class_data_files = []
         sample_counts = {}
 
-        print(f"开始处理 {len(self.class_map)} 个类别的多模态数据...")
-
         for class_name in self.class_map.keys():
-            result = self.process_class_data(class_name)
-            if result is None:
+            print(f"\n处理类别: {class_name}")
+            
+            class_data = self.process_class_data(class_name)
+            if class_data is None:
+                print(f"跳过类别 {class_name}")
                 sample_counts[class_name] = 0
                 continue
-                
-            all_stokes.append(result['stokes'])
-            all_fluorescence.append(result['fluorescence'])
-            all_images.append(result['images'])
-            all_labels.append(result['labels'])
-            sample_counts[class_name] = len(result['labels'])
+            
+            # 保存单个类别数据到临时文件
+            temp_file = self.temp_dir / f"temp_{class_name}.npz"
+            np.savez_compressed(temp_file, **class_data)
+            class_data_files.append((temp_file, class_name, len(class_data['labels'])))
+            sample_counts[class_name] = len(class_data['labels'])
+            
+            # 释放内存
+            del class_data
+            gc.collect()
+            
+            print(f"类别 {class_name} 数据已保存到临时文件，释放内存")
 
-        if not all_stokes:
-            print("错误: 没有处理任何数据")
+        if not class_data_files:
+            print("没有成功处理的类别数据")
             return None
 
-        # 合并所有类别的数据
-        try:
-            all_stokes = np.vstack(all_stokes)
-            all_fluorescence = np.vstack(all_fluorescence)
-            all_images = np.vstack(all_images)
-            all_labels = np.concatenate(all_labels)
-        except Exception as e:
-            print(f"数据合并失败: {e}")
-            return None
+        # 现在合并所有数据
+        print("\n流式合并所有类别数据...")
+        return self._merge_class_data_files_streaming(class_data_files, sample_counts, save_splits, **split_kwargs)
 
-        # 验证多模态数据一致性
-        self.validate_multimodal_consistency(all_stokes, all_fluorescence, all_images, all_labels)
-
-        # 创建完整数据集
-        dataset = {
-            'stokes': all_stokes,
-            'fluorescence': all_fluorescence,
-            'images': all_images,
-            'labels': all_labels,
-            'class_map': self.class_map,
-            'inverse_class_map': self.inverse_class_map,
-            'sample_counts': sample_counts,
-            'wavelengths': self.wavelengths,
-            'signal_length': self.signal_length,
-            'image_size': self.image_size,
-            'num_views': self.num_views
+    def _create_splits_streaming(self, class_data_files, split_indices_dict):
+        """流式创建分割数据集（修复版本）"""
+        print("\n开始流式创建分割数据集（内存优化版本）...")
+        
+        # 创建分割索引集合以快速查找
+        split_index_sets = {
+            split_name: set(indices) 
+            for split_name, indices in split_indices_dict.items()
         }
+        
+        # 初始化每个分割的临时文件列表
+        split_temp_files = {split_name: [] for split_name in split_indices_dict.keys()}
+        
+        current_global_idx = 0
+        
+        # 逐个处理类别数据
+        for temp_file, class_name, count in class_data_files:
+            print(f"流式处理类别 {class_name} 数据...")
+            
+            # 加载类别数据
+            with np.load(temp_file) as data:
+                class_stokes = data['stokes']
+                class_fluorescence = data['fluorescence']
+                class_images = data['images']
+                class_labels = data['labels']
+                
+                # 初始化每个分割的缓冲区
+                split_buffers = {
+                    split_name: {
+                        'stokes': [],
+                        'fluorescence': [],
+                        'images': [],
+                        'labels': []
+                    } for split_name in split_indices_dict.keys()
+                }
+                
+                # 分配每个样本到对应的分割
+                for local_idx in range(count):
+                    global_idx = current_global_idx + local_idx
+                    
+                    # 查找该样本属于哪个分割
+                    for split_name, index_set in split_index_sets.items():
+                        if global_idx in index_set:
+                            split_buffers[split_name]['stokes'].append(class_stokes[local_idx])
+                            split_buffers[split_name]['fluorescence'].append(class_fluorescence[local_idx])
+                            split_buffers[split_name]['images'].append(class_images[local_idx])
+                            split_buffers[split_name]['labels'].append(class_labels[local_idx])
+                            break
+                
+                # 保存每个分割的缓冲区到临时文件
+                for split_name, buffer in split_buffers.items():
+                    if buffer['stokes']:  # 如果有数据
+                        temp_split_file = self.temp_dir / f"temp_split_{split_name}_{class_name}.npz"
+                        np.savez_compressed(temp_split_file,
+                                          stokes=np.array(buffer['stokes'], dtype=np.float32),
+                                          fluorescence=np.array(buffer['fluorescence'], dtype=np.float32),
+                                          images=np.array(buffer['images'], dtype=np.float32),
+                                          labels=np.array(buffer['labels'], dtype=np.int32))
+                        split_temp_files[split_name].append(temp_split_file)
+                        print(f"  {split_name}集: {len(buffer['stokes'])} 样本已缓存")
+                
+                current_global_idx += count
+            
+            print(f"类别 {class_name} 处理完成，内存已释放")
+            gc.collect()
+        
+        # 合并每个分割的临时文件
+        for split_name, temp_files in split_temp_files.items():
+            if temp_files:
+                self._merge_split_temp_files_final(split_name, temp_files)
+            else:
+                print(f"警告: {split_name}集没有数据!")
+        
+        print("流式分割完成")
 
-        if save_splits:
-            # 分割数据集
-            splits = self.split_dataset(dataset, **split_kwargs)
+    def _merge_split_temp_files_final(self, split_name, temp_files):
+        """最终合并分割的临时文件"""
+        print(f"合并{split_name}集的{len(temp_files)}个临时文件...")
+        
+        # 计算总样本数
+        total_samples = 0
+        for temp_file in temp_files:
+            with np.load(temp_file) as data:
+                total_samples += len(data['labels'])
+        
+        if total_samples == 0:
+            print(f"警告: {split_name}集没有样本!")
+            return
+        
+        print(f"{split_name}集总样本数: {total_samples}")
+        
+        # 预分配最终数组
+        final_stokes = np.zeros((total_samples, 4, self.signal_length), dtype=np.float32)
+        final_fluorescence = np.zeros((total_samples, 16, self.signal_length), dtype=np.float32)
+        final_images = np.zeros((total_samples, self.num_views, *self.image_size, 3), dtype=np.float32)
+        final_labels = np.zeros(total_samples, dtype=np.int32)
+        
+        current_idx = 0
+        
+        # 合并所有临时文件
+        for temp_file in temp_files:
+            with np.load(temp_file) as data:
+                batch_size = len(data['labels'])
+                end_idx = current_idx + batch_size
+                
+                final_stokes[current_idx:end_idx] = data['stokes']
+                final_fluorescence[current_idx:end_idx] = data['fluorescence']
+                final_images[current_idx:end_idx] = data['images']
+                final_labels[current_idx:end_idx] = data['labels']
+                
+                current_idx = end_idx
             
-            # 保存分割后的数据集
-            self.save_split_datasets(splits)
+            # 删除临时文件
+            temp_file.unlink()
+        
+        # 保存最终文件
+        split_path = self.output_path / f'multimodal_data_{split_name}.npz'
+        np.savez_compressed(split_path,
+                          stokes=final_stokes,
+                          fluorescence=final_fluorescence,
+                          images=final_images,
+                          labels=final_labels)
+        
+        print(f"{split_name}集已保存到: {split_path} ({total_samples} 样本)")
+        
+        # 保存元数据
+        self._save_split_metadata(split_name, final_stokes.shape, final_fluorescence.shape, 
+                                final_images.shape, final_labels.shape)
+        
+        # 清理内存
+        del final_stokes, final_fluorescence, final_images, final_labels
+        gc.collect()
+
+    def _flush_split_buffer(self, split_name, buffer, final=False):
+        """清空分割缓冲区到文件"""
+        if not buffer['stokes']:
+            return
             
-            # 也保存完整数据集（可选）
-            self.save_dataset(dataset, 'multimodal_data_full.npz')
-            
-            return dataset, splits
+        split_path = self.output_path / f'multimodal_data_{split_name}.npz'
+        
+        # 转换为numpy数组
+        stokes_batch = np.array(buffer['stokes'], dtype=np.float32)
+        fluorescence_batch = np.array(buffer['fluorescence'], dtype=np.float32)
+        images_batch = np.array(buffer['images'], dtype=np.float32)
+        labels_batch = np.array(buffer['labels'], dtype=np.int32)
+        
+        if split_path.exists() and not final:
+            # 追加到现有文件 - 实际上numpy不支持追加，所以我们需要重新实现
+            # 这里我们暂时保存到临时文件，最后合并
+            temp_path = self.temp_dir / f"temp_split_{split_name}_{len(buffer['stokes'])}.npz"
+            np.savez_compressed(temp_path,
+                               stokes=stokes_batch,
+                               fluorescence=fluorescence_batch,
+                               images=images_batch,
+                               labels=labels_batch)
         else:
-            return dataset
+            # 最终保存
+            if final:
+                # 如果有临时分割文件，需要合并
+                temp_files = list(self.temp_dir.glob(f"temp_split_{split_name}_*.npz"))
+                if temp_files:
+                    self._merge_split_temp_files(split_name, temp_files, 
+                                               stokes_batch, fluorescence_batch, images_batch, labels_batch)
+                else:
+                    # 直接保存
+                    np.savez_compressed(split_path,
+                                       stokes=stokes_batch,
+                                       fluorescence=fluorescence_batch,
+                                       images=images_batch,
+                                       labels=labels_batch)
+                    
+                    print(f"{split_name}集已保存到: {split_path} ({len(labels_batch)} 样本)")
+                    
+                    # 保存元数据
+                    self._save_split_metadata(split_name, stokes_batch.shape, fluorescence_batch.shape, 
+                                            images_batch.shape, labels_batch.shape)
+        
+        # 清空缓冲区
+        buffer['stokes'].clear()
+        buffer['fluorescence'].clear() 
+        buffer['images'].clear()
+        buffer['labels'].clear()
+        
+        # 释放内存
+        del stokes_batch, fluorescence_batch, images_batch, labels_batch
+        gc.collect()
 
-    def split_dataset(self, dataset, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15, random_state=42):
-        """在预处理阶段分割数据集"""
+    def _merge_split_temp_files(self, split_name, temp_files, final_stokes, final_fluorescence, final_images, final_labels):
+        """合并分割临时文件"""
+        print(f"合并 {split_name} 集的临时文件...")
+        
+        all_stokes = [final_stokes] if final_stokes.size > 0 else []
+        all_fluorescence = [final_fluorescence] if final_fluorescence.size > 0 else []
+        all_images = [final_images] if final_images.size > 0 else []
+        all_labels = [final_labels] if final_labels.size > 0 else []
+        
+        for temp_file in temp_files:
+            with np.load(temp_file) as data:
+                all_stokes.append(data['stokes'])
+                all_fluorescence.append(data['fluorescence'])
+                all_images.append(data['images'])
+                all_labels.append(data['labels'])
+            temp_file.unlink()  # 删除临时文件
+        
+        if all_stokes:
+            merged_stokes = np.vstack(all_stokes)
+            merged_fluorescence = np.vstack(all_fluorescence)
+            merged_images = np.vstack(all_images)
+            merged_labels = np.concatenate(all_labels)
+            
+            split_path = self.output_path / f'multimodal_data_{split_name}.npz'
+            np.savez_compressed(split_path,
+                               stokes=merged_stokes,
+                               fluorescence=merged_fluorescence,
+                               images=merged_images,
+                               labels=merged_labels)
+            
+            print(f"{split_name}集已保存到: {split_path} ({len(merged_labels)} 样本)")
+            
+            # 保存元数据
+            self._save_split_metadata(split_name, merged_stokes.shape, merged_fluorescence.shape,
+                                    merged_images.shape, merged_labels.shape)
+            
+            # 释放内存
+            del merged_stokes, merged_fluorescence, merged_images, merged_labels
+            
+        gc.collect()
+
+    def _save_split_metadata(self, split_name, stokes_shape, fluorescence_shape, images_shape, labels_shape):
+        """保存分割元数据"""
+        split_metadata = {
+            'split': split_name,
+            'total_samples': labels_shape[0],
+            'data_shapes': {
+                'stokes': list(stokes_shape),
+                'fluorescence': list(fluorescence_shape),
+                'images': list(images_shape),
+                'labels': list(labels_shape)
+            }
+        }
+        
+        metadata_path = self.output_path / f'metadata_{split_name}.json'
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(split_metadata, f, indent=2, ensure_ascii=False)
+
+    def _generate_splits_info(self, class_data_files, split_indices_dict):
+        """为统计生成分割信息"""
+        print("\n生成分割统计信息...")
+        
+        # 重新读取标签信息
+        all_labels = []
+        for temp_file, class_name, count in class_data_files:
+            if temp_file.exists():  # 检查文件是否还存在
+                with np.load(temp_file) as data:
+                    all_labels.append(data['labels'])
+        
+        if not all_labels:
+            return {}
+            
+        all_labels = np.concatenate(all_labels)
+        
+        splits_info = {}
+        for split_name, indices in split_indices_dict.items():
+            split_labels = all_labels[indices]
+            splits_info[split_name] = {
+                'total_samples': len(split_labels),
+                'labels': split_labels
+            }
+        
+        return splits_info
+
+    def _cleanup_temp_files(self, class_data_files):
+        """清理临时文件"""
+        print("\n清理临时文件...")
+        for temp_file, class_name, count in class_data_files:
+            if temp_file.exists():
+                temp_file.unlink()
+        
+        # 删除临时目录
+        try:
+            if self.temp_dir.exists():
+                shutil.rmtree(self.temp_dir)
+            self.temp_dir.mkdir(exist_ok=True)
+        except:
+            pass
+
+    def split_dataset_memory_efficient(self, dataset, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15, random_state=42):
+        """内存高效的数据集分割 - 直接保存避免创建多份副本"""
         print(f"\n{'='*50}")
-        print("数据集分割")
+        print("内存高效数据集分割")
         print(f"{'='*50}")
         
         # 验证比例
@@ -427,6 +847,8 @@ class MultimodalPolarFluDataPreprocessor:
         total_samples = len(dataset['labels'])
         labels = dataset['labels']
         indices = np.arange(total_samples)
+        
+        print(f"总样本数: {total_samples}")
         
         # 第一次分割: 训练集 vs (验证集+测试集)
         train_indices, temp_indices = train_test_split(
@@ -444,17 +866,79 @@ class MultimodalPolarFluDataPreprocessor:
             random_state=random_state
         )
         
-        # 创建分割后的数据集
-        splits = {
-            'train': self._create_split_dataset(dataset, train_indices),
-            'val': self._create_split_dataset(dataset, val_indices),
-            'test': self._create_split_dataset(dataset, test_indices)
+        # 保存分割索引
+        split_indices = {
+            'train': train_indices.tolist(),
+            'val': val_indices.tolist(),
+            'test': test_indices.tolist()
         }
+        indices_path = self.output_path / 'split_indices.json'
+        with open(indices_path, 'w') as f:
+            json.dump(split_indices, f, indent=2)
+        print(f"分割索引已保存到: {indices_path}")
         
-        # 打印分割统计信息
-        self._print_split_statistics(splits, dataset['class_map'])
+        # 直接保存各个分割，不在内存中创建副本
+        splits_info = {}
+        for split_name, split_indices in [('train', train_indices), ('val', val_indices), ('test', test_indices)]:
+            print(f"\n保存 {split_name} 集 ({len(split_indices)} 样本)...")
+            
+            # 直接保存分割数据，避免创建内存副本
+            split_path = self.output_path / f'multimodal_data_{split_name}.npz'
+            
+            # 直接使用索引切片，避免分批累积 - 这是内存爆炸的根本原因
+            print(f"直接切片 {split_name} 数据 ({len(split_indices)} 样本)...")
+            
+            # 直接索引切片，不分批不累积
+            split_stokes = dataset['stokes'][split_indices]
+            split_fluorescence = dataset['fluorescence'][split_indices]
+            split_images = dataset['images'][split_indices]
+            split_labels = dataset['labels'][split_indices]
+            
+            print(f"保存 {split_name} 数据到文件...")
+            # 立即保存
+            np.savez_compressed(split_path, 
+                               stokes=split_stokes,
+                               fluorescence=split_fluorescence, 
+                               images=split_images,
+                               labels=split_labels)
+            
+            print(f"{split_name}集已保存到: {split_path}")
+            
+            # 保存分割元数据
+            split_metadata = {
+                'split': split_name,
+                'total_samples': len(split_labels),
+                'data_shapes': {
+                    'stokes': list(split_stokes.shape),
+                    'fluorescence': list(split_fluorescence.shape),
+                    'images': list(split_images.shape),
+                    'labels': list(split_labels.shape)
+                }
+            }
+            
+            metadata_path = self.output_path / f'metadata_{split_name}.json'
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(split_metadata, f, indent=2, ensure_ascii=False)
+            
+            # 收集统计信息
+            splits_info[split_name] = {
+                'total_samples': len(split_labels),
+                'labels': split_labels.copy()  # 复制一份用于统计
+            }
+            
+            # 立即释放分割数据内存 - 关键！
+            del split_stokes, split_fluorescence, split_images, split_labels
+            gc.collect()
+            
+            print(f"{split_name}集已保存并释放内存")
+            
+            # 强制内存检查
+            self.check_memory_usage()
         
-        return splits
+        # 打印统计信息
+        self._print_split_statistics_from_info(splits_info, dataset['class_map'])
+        
+        return splits_info
     
     def _create_split_dataset(self, dataset, indices):
         """根据索引创建数据集分割"""
@@ -473,6 +957,24 @@ class MultimodalPolarFluDataPreprocessor:
         
         for split_name, split_data in splits.items():
             labels = split_data['labels']
+            total = len(labels)
+            
+            print(f"\n{split_name.upper()}集: {total} 样本")
+            print("-" * 30)
+            
+            # 统计各类别样本数
+            for class_name, class_label in class_map.items():
+                count = np.sum(labels == class_label)
+                percentage = count / total * 100 if total > 0 else 0
+                print(f"  {class_name}: {count} 样本 ({percentage:.1f}%)")
+    
+    def _print_split_statistics_from_info(self, splits_info, class_map):
+        """从分割信息打印统计"""
+        print(f"\n数据集分割统计:")
+        print(f"{'='*60}")
+        
+        for split_name, split_info in splits_info.items():
+            labels = split_info['labels']
             total = len(labels)
             
             print(f"\n{split_name.upper()}集: {total} 样本")
@@ -673,6 +1175,7 @@ class MultimodalPolarFluDataPreprocessor:
             print(f"加载失败: {e}")
             return None
 
+    @staticmethod
     def load_params(params_file='params.yaml'):
         """加载参数文件"""
         try:
@@ -710,6 +1213,33 @@ class MultimodalPolarFluDataPreprocessor:
         print(f"分割统计信息已保存到: {metrics_path}")
         return metrics
 
+    def generate_split_metrics_from_info(self, splits_info, class_map, metrics_path=None):
+        """从分割信息生成统计信息并保存为JSON（用于DVC metrics）"""
+        metrics = {}
+        for split_name, split_info in splits_info.items():
+            labels = split_info['labels']
+            total = len(labels)
+            split_stats = {}
+            for class_name, class_label in class_map.items():
+                count = int(np.sum(labels == class_label))
+                percentage = float(count / total * 100) if total > 0 else 0.0
+                split_stats[class_name] = {
+                    'label': class_label,
+                    'count': count,
+                    'percentage': percentage
+                }
+            metrics[split_name] = {
+                'total_samples': total,
+                'class_stats': split_stats
+            }
+        # 保存到JSON文件
+        if metrics_path is None:
+            metrics_path = self.output_path / 'split_metrics.json'
+        with open(metrics_path, 'w', encoding='utf-8') as f:
+            json.dump(metrics, f, indent=2, ensure_ascii=False)
+        print(f"分割统计信息已保存到: {metrics_path}")
+        return metrics
+
 def main():
     # 加载参数
     params = MultimodalPolarFluDataPreprocessor.load_params()
@@ -727,9 +1257,9 @@ def main():
         random_state = split_params.get('random_state', 42)
     else:
         # 使用默认参数
-        raw_data_path = Path('/data3/zs/Multimodel_fusion/raw_data/polar_flu_data')
+        raw_data_path = Path('/data3/zs/AplimC/data/raw/polar_flu_data')
         image_data_path = Path('/data3/zs/AplimC/data/raw/images')
-        output_path = Path('/data3/zs/Multimodel_fusion/processed_data')
+        output_path = Path('/data3/zs/AplimC/data/raw/processed_data')
         train_ratio, val_ratio, test_ratio, random_state = 0.7, 0.15, 0.15, 42
 
     # 创建多模态预处理器实例
@@ -747,10 +1277,14 @@ def main():
         preprocessor.image_size = tuple(preprocess_params.get('image_size', [224, 224]))
         preprocessor.num_views = preprocess_params.get('num_views', 3)
         preprocessor.wavelengths = preprocess_params.get('wavelengths', [445, 473, 520, 630])
+        # 更新内存优化参数
+        preprocessor.batch_size = preprocess_params.get('batch_size', 50)
+        preprocessor.use_float32 = preprocess_params.get('use_float32', True)
+        preprocessor.memory_threshold = preprocess_params.get('memory_threshold', 0.85)
 
     # 处理所有类别数据并分割
-    print("开始多模态数据预处理...")
-    result = preprocessor.preprocess_all_classes(
+    print("开始多模态数据预处理（内存优化版本）...")
+    result = preprocessor.preprocess_all_classes_memory_efficient(
         save_splits=True,
         train_ratio=train_ratio,
         val_ratio=val_ratio,
@@ -760,8 +1294,8 @@ def main():
     
     # 生成分割统计信息（用于DVC metrics）
     if result is not None and isinstance(result, tuple):
-        dataset, splits = result
-        preprocessor.generate_split_metrics(splits, dataset['class_map'])
+        dataset_info, splits_info = result
+        preprocessor.generate_split_metrics_from_info(splits_info, dataset_info['class_map'])
     
 if __name__ == "__main__":
     main()
