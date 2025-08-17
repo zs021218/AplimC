@@ -1,0 +1,26 @@
+{
+  "split": "val",
+  "total_samples": 3151,
+  "data_shapes": {
+    "stokes": [
+      3151,
+      4,
+      4000
+    ],
+    "fluorescence": [
+      3151,
+      16,
+      4000
+    ],
+    "images": [
+      3151,
+      3,
+      224,
+      224,
+      3
+    ],
+    "labels": [
+      3151
+    ]
+  }
+}

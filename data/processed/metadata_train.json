@@ -1,0 +1,26 @@
+{
+  "split": "train",
+  "total_samples": 14704,
+  "data_shapes": {
+    "stokes": [
+      14704,
+      4,
+      4000
+    ],
+    "fluorescence": [
+      14704,
+      16,
+      4000
+    ],
+    "images": [
+      14704,
+      3,
+      224,
+      224,
+      3
+    ],
+    "labels": [
+      14704
+    ]
+  }
+}
