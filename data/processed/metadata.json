@@ -1,0 +1,44 @@
+{
+  "class_map": {
+    "CG": 0,
+    "IG": 1,
+    "PS3": 2,
+    "PS6": 3,
+    "PS10": 4,
+    "QDDB": 5,
+    "QZQG": 6,
+    "SG": 7,
+    "TP": 8,
+    "TS": 9,
+    "YMXH": 10,
+    "YXXB": 11
+  },
+  "total_samples": 21007,
+  "sample_counts": {
+    "CG": 2927,
+    "IG": 2651,
+    "PS3": 1361,
+    "PS6": 1479,
+    "PS10": 1102,
+    "QDDB": 1666,
+    "QZQG": 1267,
+    "SG": 1128,
+    "TP": 2136,
+    "TS": 2041,
+    "YMXH": 1548,
+    "YXXB": 1701
+  },
+  "signal_length": 4000,
+  "image_size": [
+    224,
+    224
+  ],
+  "num_views": 3,
+  "split_params": {
+    "train_ratio": 0.7,
+    "val_ratio": 0.15,
+    "test_ratio": 0.15,
+    "random_state": 42,
+    "stratified": true
+  }
+}
