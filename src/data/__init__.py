@@ -15,7 +15,10 @@ from .dataloader import (
     BalancedBatchSampler,
     HDF5CollateFunction,
     AdaptiveBatchSizer,
+    create_dataloaders,
     create_efficient_dataloader,
+    create_balanced_dataloader,
+    create_memory_optimized_dataloader
 )
 
 # 数据变换
@@ -56,6 +59,7 @@ __all__ = [
     "BalancedBatchSampler",
     "HDF5CollateFunction", 
     "AdaptiveBatchSizer",
+    "create_dataloaders",
     "create_balanced_dataloader",
     "create_efficient_dataloader",
     "create_memory_optimized_dataloader",
@@ -138,13 +142,23 @@ def create_default_dataloader(
             **kwargs
         )
     else:
-        return create_efficient_dataloader(
-            dataset=dataset,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            shuffle=(split == 'train'),
-            **kwargs
-        )
+        # 创建标准DataLoader
+        import torch
+        from torch.utils.data import DataLoader
+        
+        default_kwargs = {
+            'batch_size': batch_size,
+            'shuffle': (split == 'train'),
+            'num_workers': num_workers,
+            'pin_memory': torch.cuda.is_available(),
+            'drop_last': (split == 'train'),
+            'collate_fn': HDF5CollateFunction(dataset.load_modalities)
+        }
+        
+        # 更新用户提供的参数
+        default_kwargs.update(kwargs)
+        
+        return DataLoader(dataset, **default_kwargs)
 
 
 # 版本兼容性提示

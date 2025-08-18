@@ -401,6 +401,80 @@ def create_efficient_dataloader(
     return DataLoader(dataset, **default_kwargs)
 
 
+def create_balanced_dataloader(
+    dataset: MultimodalHDF5Dataset,
+    batch_size: int = 32,
+    num_workers: int = 4,
+    **kwargs
+) -> DataLoader:
+    """
+    创建平衡采样的数据加载器
+    
+    Args:
+        dataset: 数据集
+        batch_size: 批次大小
+        num_workers: 工作进程数
+        **kwargs: 其他DataLoader参数
+        
+    Returns:
+        DataLoader对象
+    """
+    # 创建平衡采样器
+    sampler = BalancedBatchSampler(
+        dataset=dataset,
+        batch_size=batch_size,
+        shuffle=kwargs.pop('shuffle', True),
+        drop_last=kwargs.pop('drop_last', True)
+    )
+    
+    # 设置默认参数
+    default_kwargs = {
+        'batch_sampler': sampler,
+        'num_workers': num_workers,
+        'pin_memory': torch.cuda.is_available(),
+        'collate_fn': HDF5CollateFunction(dataset.load_modalities)
+    }
+    
+    # 更新用户提供的参数
+    default_kwargs.update(kwargs)
+    
+    return DataLoader(dataset, **default_kwargs)
+
+
+def create_memory_optimized_dataloader(
+    dataset: MultimodalHDF5Dataset,
+    batch_size: int = 16,
+    num_workers: int = 2,
+    **kwargs
+) -> DataLoader:
+    """
+    创建内存优化的数据加载器
+    
+    Args:
+        dataset: 数据集
+        batch_size: 批次大小（较小以节省内存）
+        num_workers: 工作进程数（较少以节省内存）
+        **kwargs: 其他DataLoader参数
+        
+    Returns:
+        DataLoader对象
+    """
+    # 设置内存优化参数
+    default_kwargs = {
+        'batch_size': batch_size,
+        'shuffle': kwargs.pop('shuffle', True),
+        'num_workers': num_workers,
+        'pin_memory': False,  # 禁用pin_memory以节省内存
+        'drop_last': kwargs.pop('drop_last', True),
+        'collate_fn': HDF5CollateFunction(dataset.load_modalities)
+    }
+    
+    # 更新用户提供的参数
+    default_kwargs.update(kwargs)
+    
+    return DataLoader(dataset, **default_kwargs)
+
+
 if __name__ == "__main__":
     # 测试代码
     from .dataset import create_datasets

@@ -9,6 +9,16 @@ source /data3/zs/miniconda3/bin/activate pytorch_env
 PROJECT_ROOT="/data3/zs/AplimC"
 cd $PROJECT_ROOT
 
+# 设置HDF5数据文件路径
+HDF5_DATA_PATH="data/processed/multimodal_data.h5"
+
+# 检查数据文件是否存在
+if [ ! -f "$HDF5_DATA_PATH" ]; then
+    echo "错误: HDF5数据文件不存在: $HDF5_DATA_PATH"
+    echo "请先运行数据预处理脚本生成HDF5文件"
+    exit 1
+fi
+
 echo "=== 多模态分类器训练命令 ==="
 echo "选择训练模式："
 echo "1. 单模态训练"
@@ -27,20 +37,23 @@ single_modal_training() {
     echo "1.1 训练 Stokes 单模态分类器"
     python scripts/train.py \
         --config configs/stokes_only.yaml \
-        --gpu 0 \
-        --experiment_name "stokes_only_$(date +%Y%m%d_%H%M%S)"
+        --data "$HDF5_DATA_PATH" \
+        --gpu 1 \
+        --name "stokes_only_$(date +%Y%m%d_%H%M%S)"
     
     echo "1.2 训练荧光信号单模态分类器"
     python scripts/train.py \
         --config configs/fluorescence_only.yaml \
-        --gpu 0 \
-        --experiment_name "fluorescence_only_$(date +%Y%m%d_%H%M%S)"
+        --data "$HDF5_DATA_PATH" \
+        --gpu 1 \
+        --name "fluorescence_only_$(date +%Y%m%d_%H%M%S)"
     
     echo "1.3 训练图像单模态分类器"
     python scripts/train.py \
         --config configs/images_only.yaml \
-        --gpu 0 \
-        --experiment_name "images_only_$(date +%Y%m%d_%H%M%S)"
+        --data "$HDF5_DATA_PATH" \
+        --gpu 1 \
+        --name "images_only_$(date +%Y%m%d_%H%M%S)"
 }
 
 # ===================================
@@ -53,20 +66,23 @@ dual_modal_training() {
     echo "2.1 训练信号双模态分类器（Stokes + 荧光）"
     python scripts/train.py \
         --config configs/signals_dual.yaml \
+        --data "$HDF5_DATA_PATH" \
         --gpu 0 \
-        --experiment_name "signals_dual_$(date +%Y%m%d_%H%M%S)"
+        --name "signals_dual_$(date +%Y%m%d_%H%M%S)"
     
     echo "2.2 训练 Stokes + 图像双模态分类器"
     python scripts/train.py \
         --config configs/stokes_images_dual.yaml \
+        --data "$HDF5_DATA_PATH" \
         --gpu 0 \
-        --experiment_name "stokes_images_dual_$(date +%Y%m%d_%H%M%S)"
+        --name "stokes_images_dual_$(date +%Y%m%d_%H%M%S)"
     
     echo "2.3 训练荧光 + 图像双模态分类器"
     python scripts/train.py \
         --config configs/fluorescence_images_dual.yaml \
+        --data "$HDF5_DATA_PATH" \
         --gpu 0 \
-        --experiment_name "fluorescence_images_dual_$(date +%Y%m%d_%H%M%S)"
+        --name "fluorescence_images_dual_$(date +%Y%m%d_%H%M%S)"
 }
 
 # ===================================
@@ -79,8 +95,9 @@ full_modal_training() {
     echo "3.1 训练全模态分类器（Stokes + 荧光 + 图像）"
     python scripts/train.py \
         --config configs/full_multimodal.yaml \
+        --data "$HDF5_DATA_PATH" \
         --gpu 0 \
-        --experiment_name "full_multimodal_$(date +%Y%m%d_%H%M%S)"
+        --name "full_multimodal_$(date +%Y%m%d_%H%M%S)"
 }
 
 # ===================================
@@ -111,10 +128,11 @@ comparison_experiments() {
         echo "正在训练: $config"
         python scripts/train.py \
             --config "configs/${config}.yaml" \
+            --data "$HDF5_DATA_PATH" \
             --gpu 0 \
-            --experiment_name "${config}_batch" \
-            --save_dir "$BATCH_DIR/${config}" \
-            --log_file "$BATCH_DIR/${config}_train.log"
+            --name "${config}_batch" \
+            --output-dir "$BATCH_DIR/${config}" \
+            2>&1 | tee "$BATCH_DIR/${config}_train.log"
         
         echo "完成训练: $config"
         echo "---"
@@ -134,11 +152,11 @@ quick_training() {
     echo "快速训练最简单的配置..."
     python scripts/train.py \
         --config configs/stokes_only.yaml \
+        --data "$HDF5_DATA_PATH" \
         --gpu 0 \
-        --experiment_name "quick_test" \
-        --max_epochs 5 \
-        --batch_size 8 \
-        --fast_dev_run true
+        --name "quick_test" \
+        --epochs 5 \
+        --batch-size 8
 }
 
 # ===================================
