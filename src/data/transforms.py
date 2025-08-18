@@ -1,196 +1,499 @@
+#!/usr/bin/env python3
 """
-数据变换定义
+多模态数据变换
+支持信号数据和图像数据的各种变换操作
 """
 
 import torch
-import torchvision.transforms as transforms
-from typing import Dict, Callable
+import torch.nn.functional as F
 import numpy as np
+import random
+from typing import Dict, List, Optional, Tuple, Union, Callable
+import logging
 
-def get_transforms() -> Dict[str, transforms.Compose]:
-    """获取不同数据集分割的图像变换"""
-    
-    # 计算ImageNet均值和标准差（用于预训练模型）
-    imagenet_mean = [0.485, 0.456, 0.406]
-    imagenet_std = [0.229, 0.224, 0.225]
-    
-    # 训练时的数据增强
-    train_transform = transforms.Compose([
-        transforms.RandomRotation(degrees=10),
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ColorJitter(
-            brightness=0.2, 
-            contrast=0.2, 
-            saturation=0.2, 
-            hue=0.1
-        ),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
-    ])
-    
-    # 验证和测试时的变换（无数据增强）
-    val_test_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
-    ])
-    
-    return {
-        'train': train_transform,
-        'val': val_test_transform,
-        'test': val_test_transform,
-        'full': val_test_transform  # 完整数据集使用无增强变换
-    }
+logger = logging.getLogger(__name__)
 
-def get_signal_transforms() -> Dict[str, Callable]:
-    """信号数据的变换函数"""
-    
-    def normalize_signal(signal: torch.Tensor) -> torch.Tensor:
-        """归一化信号数据到均值0，标准差1"""
-        mean = signal.mean(dim=-1, keepdim=True)
-        std = signal.std(dim=-1, keepdim=True)
-        return (signal - mean) / (std + 1e-8)
-    
-    def standardize_signal(signal: torch.Tensor) -> torch.Tensor:
-        """标准化信号数据到[0,1]范围"""
-        min_val = signal.min(dim=-1, keepdim=True)[0]
-        max_val = signal.max(dim=-1, keepdim=True)[0]
-        return (signal - min_val) / (max_val - min_val + 1e-8)
-    
-    def add_noise(signal: torch.Tensor, noise_level: float = 0.01) -> torch.Tensor:
-        """添加高斯噪声进行数据增强"""
-        noise = torch.randn_like(signal) * noise_level
-        return signal + noise
-    
-    def smooth_signal(signal: torch.Tensor, kernel_size: int = 5) -> torch.Tensor:
-        """使用移动平均平滑信号"""
-        if kernel_size <= 1:
-            return signal
-        
-        # 创建移动平均核
-        kernel = torch.ones(kernel_size) / kernel_size
-        
-        # 对信号进行卷积（每个通道分别处理）
-        if signal.dim() == 2:  # (channels, length)
-            smoothed = torch.zeros_like(signal)
-            for i in range(signal.shape[0]):
-                # 使用torch.nn.functional.conv1d进行一维卷积
-                sig = signal[i:i+1].unsqueeze(0)  # (1, 1, length)
-                kern = kernel.unsqueeze(0).unsqueeze(0)  # (1, 1, kernel_size)
-                smoothed_sig = torch.nn.functional.conv1d(
-                    sig, kern, padding=kernel_size//2
-                )
-                smoothed[i] = smoothed_sig.squeeze()
-            return smoothed
-        else:
-            return signal
-    
-    return {
-        'normalize': normalize_signal,
-        'standardize': standardize_signal,
-        'add_noise': add_noise,
-        'smooth': smooth_signal
-    }
 
-class SignalAugmentation:
-    """信号数据增强类"""
+class BaseTransform:
+    """基础变换类"""
+    
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        raise NotImplementedError
+    
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}()"
+
+
+class Compose:
+    """组合多个变换"""
+    
+    def __init__(self, transforms: List[BaseTransform]):
+        self.transforms = transforms
+    
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        for transform in self.transforms:
+            sample = transform(sample)
+        return sample
+    
+    def __repr__(self) -> str:
+        format_string = f"{self.__class__.__name__}([\n"
+        for t in self.transforms:
+            format_string += f"    {t},\n"
+        format_string += "])"
+        return format_string
+
+
+# ===============================
+# 信号数据变换
+# ===============================
+
+class SignalNormalize(BaseTransform):
+    """信号数据归一化"""
     
     def __init__(
-        self, 
-        apply_noise: bool = True,
-        noise_level: float = 0.01,
-        apply_smooth: bool = False,
-        smooth_kernel_size: int = 3,
-        apply_normalize: bool = True
+        self,
+        modalities: List[str] = ['stokes', 'fluorescence'],
+        method: str = 'zscore',  # 'zscore', 'minmax', 'robust'
+        per_channel: bool = True
     ):
-        self.apply_noise = apply_noise
-        self.noise_level = noise_level
-        self.apply_smooth = apply_smooth
-        self.smooth_kernel_size = smooth_kernel_size
-        self.apply_normalize = apply_normalize
-        
-        self.transforms = get_signal_transforms()
+        self.modalities = modalities
+        self.method = method
+        self.per_channel = per_channel
     
-    def __call__(self, signal: torch.Tensor) -> torch.Tensor:
-        """应用信号变换"""
-        if self.apply_normalize:
-            signal = self.transforms['normalize'](signal)
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        for modality in self.modalities:
+            if modality in sample:
+                data = sample[modality]
+                
+                if self.method == 'zscore':
+                    if self.per_channel:
+                        # 按通道归一化
+                        mean = data.mean(dim=-1, keepdim=True)
+                        std = data.std(dim=-1, keepdim=True)
+                        sample[modality] = (data - mean) / (std + 1e-8)
+                    else:
+                        # 全局归一化
+                        mean = data.mean()
+                        std = data.std()
+                        sample[modality] = (data - mean) / (std + 1e-8)
+                
+                elif self.method == 'minmax':
+                    if self.per_channel:
+                        min_val = data.min(dim=-1, keepdim=True)[0]
+                        max_val = data.max(dim=-1, keepdim=True)[0]
+                        sample[modality] = (data - min_val) / (max_val - min_val + 1e-8)
+                    else:
+                        min_val = data.min()
+                        max_val = data.max()
+                        sample[modality] = (data - min_val) / (max_val - min_val + 1e-8)
+                
+                elif self.method == 'robust':
+                    if self.per_channel:
+                        median = data.median(dim=-1, keepdim=True)[0]
+                        mad = torch.median(torch.abs(data - median), dim=-1, keepdim=True)[0]
+                        sample[modality] = (data - median) / (mad + 1e-8)
+                    else:
+                        median = data.median()
+                        mad = torch.median(torch.abs(data - median))
+                        sample[modality] = (data - median) / (mad + 1e-8)
         
-        if self.apply_smooth:
-            signal = self.transforms['smooth'](signal, self.smooth_kernel_size)
-        
-        if self.apply_noise:
-            signal = self.transforms['add_noise'](signal, self.noise_level)
-        
-        return signal
+        return sample
+    
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(modalities={self.modalities}, method={self.method})"
 
-def get_custom_transforms(config: Dict) -> Dict[str, transforms.Compose]:
-    """根据配置创建自定义变换"""
+
+class SignalClip(BaseTransform):
+    """信号数据裁剪"""
     
-    # 默认配置
-    default_config = {
-        'image_size': 224,
-        'mean': [0.485, 0.456, 0.406],
-        'std': [0.229, 0.224, 0.225],
-        'train_augmentation': {
-            'rotation': 10,
-            'horizontal_flip': 0.5,
-            'color_jitter': {
-                'brightness': 0.2,
-                'contrast': 0.2,
-                'saturation': 0.2,
-                'hue': 0.1
-            }
-        }
-    }
+    def __init__(
+        self,
+        modalities: List[str] = ['stokes', 'fluorescence'],
+        min_val: float = -5.0,
+        max_val: float = 5.0
+    ):
+        self.modalities = modalities
+        self.min_val = min_val
+        self.max_val = max_val
     
-    # 更新配置
-    default_config.update(config)
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        for modality in self.modalities:
+            if modality in sample:
+                sample[modality] = torch.clamp(sample[modality], self.min_val, self.max_val)
+        return sample
+
+
+class SignalRandomCrop(BaseTransform):
+    """信号随机裁剪"""
     
-    # 构建变换
-    augment_config = default_config['train_augmentation']
+    def __init__(
+        self,
+        modalities: List[str] = ['stokes', 'fluorescence'],
+        crop_length: int = 3000,
+        min_length: int = 2000
+    ):
+        self.modalities = modalities
+        self.crop_length = crop_length
+        self.min_length = min_length
     
-    train_transforms = [
-        transforms.Resize((default_config['image_size'], default_config['image_size'])),
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        for modality in self.modalities:
+            if modality in sample:
+                data = sample[modality]
+                signal_length = data.shape[-1]
+                
+                if signal_length > self.crop_length:
+                    # 随机选择起始位置
+                    start = random.randint(0, signal_length - self.crop_length)
+                    sample[modality] = data[..., start:start + self.crop_length]
+                elif signal_length < self.min_length:
+                    # 填充到最小长度
+                    pad_length = self.min_length - signal_length
+                    sample[modality] = F.pad(data, (0, pad_length), mode='reflect')
+        
+        return sample
+
+
+class SignalGaussianNoise(BaseTransform):
+    """信号添加高斯噪声"""
+    
+    def __init__(
+        self,
+        modalities: List[str] = ['stokes', 'fluorescence'],
+        noise_std: float = 0.01,
+        prob: float = 0.5
+    ):
+        self.modalities = modalities
+        self.noise_std = noise_std
+        self.prob = prob
+    
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        if random.random() < self.prob:
+            for modality in self.modalities:
+                if modality in sample:
+                    data = sample[modality]
+                    noise = torch.randn_like(data) * self.noise_std
+                    sample[modality] = data + noise
+        
+        return sample
+
+
+class SignalSmoothing(BaseTransform):
+    """信号平滑"""
+    
+    def __init__(
+        self,
+        modalities: List[str] = ['stokes', 'fluorescence'],
+        kernel_size: int = 5,
+        sigma: float = 1.0
+    ):
+        self.modalities = modalities
+        self.kernel_size = kernel_size
+        self.sigma = sigma
+        
+        # 创建高斯核
+        self.gaussian_kernel = self._create_gaussian_kernel()
+    
+    def _create_gaussian_kernel(self) -> torch.Tensor:
+        """创建1D高斯核"""
+        x = torch.arange(self.kernel_size, dtype=torch.float32)
+        x = x - (self.kernel_size - 1) / 2
+        kernel = torch.exp(-0.5 * (x / self.sigma) ** 2)
+        kernel = kernel / kernel.sum()
+        return kernel.view(1, 1, -1)
+    
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        for modality in self.modalities:
+            if modality in sample:
+                data = sample[modality]
+                original_shape = data.shape
+                
+                # 重塑为(batch, channel, length)格式
+                if data.dim() == 2:  # (channels, length)
+                    data = data.unsqueeze(0)  # (1, channels, length)
+                elif data.dim() == 1:  # (length,)
+                    data = data.unsqueeze(0).unsqueeze(0)  # (1, 1, length)
+                
+                # 应用卷积平滑
+                smoothed = F.conv1d(data, self.gaussian_kernel, padding=self.kernel_size//2)
+                
+                # 恢复原始形状
+                sample[modality] = smoothed.squeeze().view(original_shape)
+        
+        return sample
+
+
+# ===============================
+# 图像数据变换
+# ===============================
+
+class ImageNormalize(BaseTransform):
+    """图像归一化"""
+    
+    def __init__(
+        self,
+        mean: Tuple[float, float, float] = (0.485, 0.456, 0.406),
+        std: Tuple[float, float, float] = (0.229, 0.224, 0.225)
+    ):
+        self.mean = torch.tensor(mean).view(1, 1, 1, 3)
+        self.std = torch.tensor(std).view(1, 1, 1, 3)
+    
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        if 'images' in sample:
+            # 假设images shape: (num_views, H, W, 3)
+            images = sample['images']
+            sample['images'] = (images - self.mean) / self.std
+        
+        return sample
+
+
+class ImageRandomRotation(BaseTransform):
+    """图像随机旋转"""
+    
+    def __init__(self, degrees: float = 15.0, prob: float = 0.5):
+        self.degrees = degrees
+        self.prob = prob
+    
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        if random.random() < self.prob and 'images' in sample:
+            images = sample['images']  # (num_views, H, W, 3)
+            
+            # 对每个视图应用相同的旋转
+            angle = random.uniform(-self.degrees, self.degrees)
+            angle_rad = np.deg2rad(angle)
+            
+            # 创建旋转矩阵
+            cos_val = np.cos(angle_rad)
+            sin_val = np.sin(angle_rad)
+            rotation_matrix = torch.tensor([
+                [cos_val, -sin_val, 0],
+                [sin_val, cos_val, 0]
+            ], dtype=torch.float32)
+            
+            # 应用旋转
+            rotated_images = []
+            for view_idx in range(images.shape[0]):
+                view = images[view_idx].permute(2, 0, 1)  # (3, H, W)
+                grid = F.affine_grid(
+                    rotation_matrix.unsqueeze(0),
+                    view.unsqueeze(0).shape,
+                    align_corners=False
+                )
+                rotated_view = F.grid_sample(
+                    view.unsqueeze(0),
+                    grid,
+                    align_corners=False
+                ).squeeze(0)
+                rotated_images.append(rotated_view.permute(1, 2, 0))  # (H, W, 3)
+            
+            sample['images'] = torch.stack(rotated_images, dim=0)
+        
+        return sample
+
+
+class ImageRandomFlip(BaseTransform):
+    """图像随机翻转"""
+    
+    def __init__(self, horizontal_prob: float = 0.5, vertical_prob: float = 0.2):
+        self.horizontal_prob = horizontal_prob
+        self.vertical_prob = vertical_prob
+    
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        if 'images' in sample:
+            images = sample['images']
+            
+            # 水平翻转
+            if random.random() < self.horizontal_prob:
+                images = torch.flip(images, dims=[2])  # 沿宽度翻转
+            
+            # 垂直翻转
+            if random.random() < self.vertical_prob:
+                images = torch.flip(images, dims=[1])  # 沿高度翻转
+            
+            sample['images'] = images
+        
+        return sample
+
+
+class ImageColorJitter(BaseTransform):
+    """图像颜色抖动"""
+    
+    def __init__(
+        self,
+        brightness: float = 0.2,
+        contrast: float = 0.2,
+        saturation: float = 0.2,
+        prob: float = 0.5
+    ):
+        self.brightness = brightness
+        self.contrast = contrast
+        self.saturation = saturation
+        self.prob = prob
+    
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        if random.random() < self.prob and 'images' in sample:
+            images = sample['images']  # (num_views, H, W, 3)
+            
+            # 亮度调整
+            if self.brightness > 0:
+                brightness_factor = random.uniform(1 - self.brightness, 1 + self.brightness)
+                images = images * brightness_factor
+            
+            # 对比度调整
+            if self.contrast > 0:
+                contrast_factor = random.uniform(1 - self.contrast, 1 + self.contrast)
+                mean = images.mean(dim=[1, 2], keepdim=True)
+                images = (images - mean) * contrast_factor + mean
+            
+            # 饱和度调整（简化版本）
+            if self.saturation > 0:
+                saturation_factor = random.uniform(1 - self.saturation, 1 + self.saturation)
+                gray = images.mean(dim=-1, keepdim=True)
+                images = gray + (images - gray) * saturation_factor
+            
+            # 裁剪到有效范围
+            images = torch.clamp(images, 0, 1)
+            sample['images'] = images
+        
+        return sample
+
+
+# ===============================
+# 混合变换
+# ===============================
+
+class RandomMixUp(BaseTransform):
+    """随机MixUp数据增强"""
+    
+    def __init__(
+        self,
+        alpha: float = 0.2,
+        prob: float = 0.3,
+        modalities: List[str] = ['stokes', 'fluorescence', 'images']
+    ):
+        self.alpha = alpha
+        self.prob = prob
+        self.modalities = modalities
+    
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        # 注意：这个变换需要批次级别的实现
+        # 这里提供单样本的框架
+        if random.random() < self.prob:
+            # 在实际使用中，需要访问其他样本进行混合
+            # 这里只是添加小幅度噪声作为近似
+            lambda_val = np.random.beta(self.alpha, self.alpha)
+            
+            for modality in self.modalities:
+                if modality in sample:
+                    noise = torch.randn_like(sample[modality]) * 0.01
+                    sample[modality] = lambda_val * sample[modality] + (1 - lambda_val) * noise
+        
+        return sample
+
+
+class ToDevice(BaseTransform):
+    """将数据移动到指定设备"""
+    
+    def __init__(self, device: torch.device):
+        self.device = device
+    
+    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        return {key: value.to(self.device) if isinstance(value, torch.Tensor) else value
+                for key, value in sample.items()}
+
+
+# ===============================
+# 预定义变换组合
+# ===============================
+
+def get_train_transforms(config: Optional[Dict] = None) -> Compose:
+    """获取训练时的数据变换"""
+    if config is None:
+        config = {}
+    
+    transforms = [
+        # 信号变换
+        SignalNormalize(
+            method=config.get('signal_norm_method', 'zscore'),
+            per_channel=config.get('signal_norm_per_channel', True)
+        ),
+        SignalRandomCrop(
+            crop_length=config.get('signal_crop_length', 3800)
+        ),
+        SignalGaussianNoise(
+            noise_std=config.get('signal_noise_std', 0.005),
+            prob=config.get('signal_noise_prob', 0.3)
+        ),
+        
+        # 图像变换
+        ImageRandomRotation(
+            degrees=config.get('image_rotation_degrees', 10.0),
+            prob=config.get('image_rotation_prob', 0.4)
+        ),
+        ImageRandomFlip(
+            horizontal_prob=config.get('image_hflip_prob', 0.5),
+            vertical_prob=config.get('image_vflip_prob', 0.2)
+        ),
+        ImageColorJitter(
+            brightness=config.get('image_brightness', 0.1),
+            contrast=config.get('image_contrast', 0.1),
+            saturation=config.get('image_saturation', 0.1),
+            prob=config.get('image_jitter_prob', 0.3)
+        ),
+        ImageNormalize()
     ]
     
-    # 添加数据增强
-    if augment_config.get('rotation', 0) > 0:
-        train_transforms.append(transforms.RandomRotation(augment_config['rotation']))
+    return Compose(transforms)
+
+
+def get_val_transforms(config: Optional[Dict] = None) -> Compose:
+    """获取验证/测试时的数据变换"""
+    if config is None:
+        config = {}
     
-    if augment_config.get('horizontal_flip', 0) > 0:
-        train_transforms.append(transforms.RandomHorizontalFlip(augment_config['horizontal_flip']))
-    
-    if augment_config.get('color_jitter'):
-        cj = augment_config['color_jitter']
-        train_transforms.append(transforms.ColorJitter(
-            brightness=cj.get('brightness', 0),
-            contrast=cj.get('contrast', 0),
-            saturation=cj.get('saturation', 0),
-            hue=cj.get('hue', 0)
-        ))
-    
-    # 添加基础变换
-    train_transforms.extend([
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=default_config['mean'], 
-            std=default_config['std']
-        )
-    ])
-    
-    # 验证/测试变换
-    val_test_transforms = [
-        transforms.Resize((default_config['image_size'], default_config['image_size'])),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=default_config['mean'], 
-            std=default_config['std']
-        )
+    transforms = [
+        # 信号变换（仅标准化）
+        SignalNormalize(
+            method=config.get('signal_norm_method', 'zscore'),
+            per_channel=config.get('signal_norm_per_channel', True)
+        ),
+        
+        # 图像变换（仅标准化）
+        ImageNormalize()
     ]
     
-    return {
-        'train': transforms.Compose(train_transforms),
-        'val': transforms.Compose(val_test_transforms),
-        'test': transforms.Compose(val_test_transforms),
-        'full': transforms.Compose(val_test_transforms)
+    return Compose(transforms)
+
+
+if __name__ == "__main__":
+    # 测试变换
+    # 创建模拟数据
+    sample = {
+        'stokes': torch.randn(4, 4000),
+        'fluorescence': torch.randn(16, 4000),
+        'images': torch.rand(3, 224, 224, 3),
+        'labels': torch.tensor(5)
     }
+    
+    print("原始数据形状:")
+    for key, value in sample.items():
+        if isinstance(value, torch.Tensor):
+            print(f"{key}: {value.shape}")
+    
+    # 测试训练变换
+    train_transform = get_train_transforms()
+    transformed_sample = train_transform(sample)
+    
+    print("\n变换后数据形状:")
+    for key, value in transformed_sample.items():
+        if isinstance(value, torch.Tensor):
+            print(f"{key}: {value.shape}")
+    
+    # 测试验证变换
+    val_transform = get_val_transforms()
+    val_sample = val_transform(sample)
+    
+    print("\n验证变换后数据形状:")
+    for key, value in val_sample.items():
+        if isinstance(value, torch.Tensor):
+            print(f"{key}: {value.shape}")

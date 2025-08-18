@@ -1,93 +1,186 @@
+#!/usr/bin/env python3
 """
-数据处理模块
-
-该模块包含了多模态偏振荧光数据的数据集定义、数据加载器和数据变换。
+数据模块 - 专为HDF5格式优化的多模态数据加载和处理
+支持大规模数据集的高效加载、平衡采样和内存优化
 """
 
-from .dataset import MultimodalPolarFluDataset
-from .dataloader import MultimodalDataLoader, create_dataloaders
-from .transforms import get_transforms, get_signal_transforms, SignalAugmentation
-
-__all__ = [
-    'MultimodalPolarFluDataset',
-    'MultimodalDataLoader', 
-    'create_dataloaders',
-    'get_transforms',
-    'get_signal_transforms',
-    'SignalAugmentation'
-]
-
+# 核心数据加载类
 from .dataset import (
-    MultimodalPolarFluDataset,
-    get_dataset_statistics,
-    create_dataset
+    MultimodalHDF5Dataset,
+    HDF5DatasetInfo,
+    CacheConfig
 )
 
+# 数据加载器和采样器
 from .dataloader import (
-    MultimodalDataLoader,
-    create_dataloaders,
-    get_class_weights
+    BalancedBatchSampler,
+    HDF5CollateFunction,
+    AdaptiveBatchSizer,
+    create_balanced_dataloader,
+    create_efficient_dataloader,
+    create_memory_optimized_dataloader
 )
 
+# 数据变换
 from .transforms import (
-    get_image_transforms,
-    get_signal_transforms,
-    MultimodalTransform
+    # 基础变换
+    BaseTransform,
+    Compose,
+    ToDevice,
+    
+    # 信号变换
+    SignalNormalize,
+    SignalClip,
+    SignalRandomCrop,
+    SignalGaussianNoise,
+    SignalSmoothing,
+    
+    # 图像变换
+    ImageNormalize,
+    ImageRandomRotation,
+    ImageRandomFlip,
+    ImageColorJitter,
+    
+    # 混合变换
+    RandomMixUp,
+    
+    # 预定义变换组合
+    get_train_transforms,
+    get_val_transforms
 )
 
+__version__ = "2.0.0"
 __all__ = [
-    # Dataset classes and utilities
-    'MultimodalPolarFluDataset',
-    'get_dataset_statistics', 
-    'create_dataset',
+    # 数据集类
+    "MultimodalHDF5Dataset",
+    "HDF5DatasetInfo", 
+    "CacheConfig",
     
-    # DataLoader classes and utilities
-    'MultimodalDataLoader',
-    'create_dataloaders',
-    'get_class_weights',
+    # 数据加载器
+    "BalancedBatchSampler",
+    "HDF5CollateFunction", 
+    "AdaptiveBatchSizer",
+    "create_balanced_dataloader",
+    "create_efficient_dataloader",
+    "create_memory_optimized_dataloader",
     
-    # Transform functions
-    'get_image_transforms',
-    'get_signal_transforms',
-    'MultimodalTransform',
+    # 变换类
+    "BaseTransform",
+    "Compose",
+    "ToDevice",
+    "SignalNormalize",
+    "SignalClip", 
+    "SignalRandomCrop",
+    "SignalGaussianNoise",
+    "SignalSmoothing",
+    "ImageNormalize",
+    "ImageRandomRotation",
+    "ImageRandomFlip", 
+    "ImageColorJitter",
+    "RandomMixUp",
+    "get_train_transforms",
+    "get_val_transforms"
 ]
 
-# Package metadata
-__version__ = '1.0.0'
-__author__ = 'AplimC Team'
-__description__ = 'Multimodal polar fluorescence data handling package'
 
-def get_package_info():
-    """Get package information"""
-    return {
-        'name': 'AplimC.data',
-        'version': __version__,
-        'author': __author__,
-        'description': __description__,
-        'components': [
-            'dataset - PyTorch Dataset classes',
-            'dataloader - DataLoader utilities', 
-            'transforms - Data transformation functions'
-        ]
+def get_dataset_info():
+    """获取数据集信息"""
+    info = {
+        "format": "HDF5",
+        "modalities": ["stokes", "fluorescence", "images"],
+        "stokes_shape": (4, 4000),
+        "fluorescence_shape": (16, 4000), 
+        "images_shape": (3, 224, 224, 3),
+        "num_classes": 12,
+        "total_samples": 21007,
+        "dtype": "float32"
     }
+    return info
 
-# Convenience function for quick dataset creation
-def quick_setup(data_path, batch_size=32, num_workers=4, **kwargs):
+
+def create_default_dataloader(
+    hdf5_path: str,
+    split: str = 'train',
+    batch_size: int = 32,
+    num_workers: int = 4,
+    balanced: bool = True,
+    use_cache: bool = True,
+    **kwargs
+):
     """
-    Quick setup function for creating train/val/test dataloaders
+    创建默认配置的数据加载器
     
     Args:
-        data_path (str): Path to processed data
-        batch_size (int): Batch size for dataloaders
-        num_workers (int): Number of worker processes
-        **kwargs: Additional arguments for dataloader creation
-        
+        hdf5_path: HDF5文件路径
+        split: 数据分割 ('train', 'val', 'test')
+        batch_size: 批次大小
+        num_workers: 工作进程数
+        balanced: 是否使用平衡采样
+        use_cache: 是否使用缓存
+        **kwargs: 其他参数
+    
     Returns:
-        tuple: (train_loader, val_loader, test_loader)
+        DataLoader对象
     """
-    return create_dataloaders(
-        data_path=data_path,
-        batch_size=batch_size, 
-        num_workers=num_workers,
-        **kwargs
+    from torch.utils.data import DataLoader
+    
+    # 配置缓存
+    cache_config = CacheConfig(
+        enable_cache=use_cache,
+        cache_size=kwargs.get('cache_size', 1000),
+        memory_limit=kwargs.get('memory_limit', 8.0)
+    ) if use_cache else None
+    
+    # 创建数据集
+    dataset = MultimodalHDF5Dataset(
+        hdf5_path=hdf5_path,
+        split=split,
+        cache_config=cache_config,
+        transforms=get_train_transforms() if split == 'train' else get_val_transforms()
     )
+    
+    # 选择数据加载器创建函数
+    if balanced and split == 'train':
+        return create_balanced_dataloader(
+            dataset=dataset,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            **kwargs
+        )
+    else:
+        return create_efficient_dataloader(
+            dataset=dataset,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            shuffle=(split == 'train'),
+            **kwargs
+        )
+
+
+# 版本兼容性提示
+import warnings
+
+def check_dependencies():
+    """检查依赖项"""
+    try:
+        import h5py
+        import torch
+        import numpy as np
+    except ImportError as e:
+        warnings.warn(f"Missing required dependency: {e}")
+        return False
+    
+    # 检查版本
+    import torch
+    if torch.__version__ < "1.8.0":
+        warnings.warn("PyTorch version < 1.8.0 may have compatibility issues")
+    
+    return True
+
+
+# 模块初始化
+check_dependencies()
+
+# 设置日志
+import logging
+logging.getLogger(__name__).addHandler(logging.NullHandler())
