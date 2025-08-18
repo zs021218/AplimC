@@ -7,8 +7,7 @@
 # 核心数据加载类
 from .dataset import (
     MultimodalHDF5Dataset,
-    HDF5DatasetInfo,
-    CacheConfig
+    MultimodalSubset
 )
 
 # 数据加载器和采样器
@@ -16,9 +15,7 @@ from .dataloader import (
     BalancedBatchSampler,
     HDF5CollateFunction,
     AdaptiveBatchSizer,
-    create_balanced_dataloader,
     create_efficient_dataloader,
-    create_memory_optimized_dataloader
 )
 
 # 数据变换
@@ -53,8 +50,7 @@ __version__ = "2.0.0"
 __all__ = [
     # 数据集类
     "MultimodalHDF5Dataset",
-    "HDF5DatasetInfo", 
-    "CacheConfig",
+    "MultimodalSubset",
     
     # 数据加载器
     "BalancedBatchSampler",
@@ -124,19 +120,13 @@ def create_default_dataloader(
     """
     from torch.utils.data import DataLoader
     
-    # 配置缓存
-    cache_config = CacheConfig(
-        enable_cache=use_cache,
-        cache_size=kwargs.get('cache_size', 1000),
-        memory_limit=kwargs.get('memory_limit', 8.0)
-    ) if use_cache else None
-    
     # 创建数据集
     dataset = MultimodalHDF5Dataset(
         hdf5_path=hdf5_path,
         split=split,
-        cache_config=cache_config,
-        transforms=get_train_transforms() if split == 'train' else get_val_transforms()
+        cache_size=kwargs.get('cache_size', 1000) if use_cache else 0,
+        memory_map=kwargs.get('memory_map', True),
+        transform=get_train_transforms() if split == 'train' else get_val_transforms()
     )
     
     # 选择数据加载器创建函数

@@ -1,11 +1,11 @@
+#!/usr/bin/env python3
 """
-训练模块
-
-该模块包含了模型训练相关的工具和类。
+训练模块 - 多模态分类模型训练
 """
 
 from .trainer import MultimodalTrainer
 
+__version__ = "1.0.0"
 __all__ = [
-    'MultimodalTrainer'
+    "MultimodalTrainer"
 ]
