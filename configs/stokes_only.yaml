@@ -1,0 +1,48 @@
+# Stokes参数单模态分类配置
+# 遵循奥卡姆剃刀原理 - 最简单的信号分类器
+
+model:
+  # 基本参数
+  num_classes: 12
+  modalities: ['stokes']
+  
+  # Stokes参数配置
+  stokes_dim: 4
+  stokes_length: 4000
+  
+  # 网络结构 - 简化架构
+  hidden_dims: [256, 128, 64]
+  dropout_rate: 0.2
+  use_batch_norm: true
+  activation: 'relu'
+  
+  # 融合策略（单模态无需融合）
+  fusion_strategy: 'single'
+
+training:
+  # 训练参数
+  batch_size: 64
+  max_epochs: 100
+  learning_rate: 0.002
+  weight_decay: 0.0001
+  num_workers: 4
+  
+  # 正则化
+  gradient_clip_val: 1.0
+  early_stopping_patience: 20
+  save_every: 10
+  
+  # 优化器
+  optimizer: 'adamw'
+  scheduler: 'cosine'
+
+data:
+  hdf5_path: 'data/processed/multimodal_data.h5'
+  use_cache: true
+  cache_size: 1000
+  memory_limit: 4.0
+
+experiment:
+  name: 'stokes_only'
+  description: '仅使用Stokes参数的简单分类器'
+  save_dir: 'experiments/stokes_only'

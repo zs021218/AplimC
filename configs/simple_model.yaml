@@ -1,0 +1,65 @@
+# 模型配置文件
+# 基于奥卡姆剃刀原理的简单有效配置
+
+# 数据配置
+data:
+  num_classes: 12
+  input_shapes:
+    stokes: [4, 4000]
+    fluorescence: [16, 4000] 
+    images: [3, 224, 224, 3]
+
+# 模型配置 - 简单有效配置
+model:
+  # 模态选择
+  use_stokes: true
+  use_fluorescence: true
+  use_images: true
+  
+  # 网络结构
+  hidden_dims: [256, 128]  # 简化的分类头
+  dropout_rate: 0.2
+  activation: 'relu'
+  
+  # 融合策略
+  fusion_strategy: 'concat'  # 最简单的融合方式
+
+# 训练配置
+training:
+  # 基础参数
+  learning_rate: 1e-3
+  batch_size: 32
+  num_epochs: 50
+  weight_decay: 1e-4
+  
+  # 学习率调度
+  scheduler: 'cosine'
+  
+  # 早停
+  early_stopping: true
+  patience: 10
+  min_delta: 1e-4
+  
+  # 优化器
+  optimizer: 'adamw'
+  
+  # 正则化
+  label_smoothing: 0.05
+  
+  # 验证
+  val_frequency: 1
+  save_best_only: true
+
+# 数据加载配置
+dataloader:
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+
+# 日志和保存配置
+logging:
+  log_level: 'INFO'
+  save_dir: 'experiments'
+  experiment_name: 'multimodal_simple'
+  save_frequency: 5

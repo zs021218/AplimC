@@ -1,0 +1,51 @@
+# Stokes参数和图像双模态分类配置
+# 结合偏振信息和视觉信息
+
+model:
+  # 基本参数
+  num_classes: 12
+  modalities: ['stokes', 'images']
+  
+  # 模态配置
+  stokes_dim: 4
+  stokes_length: 4000
+  image_channels: 3
+  image_size: 224
+  num_views: 3
+  
+  # 网络结构 - 适应不同类型的模态
+  hidden_dims: [768, 384, 192]
+  dropout_rate: 0.35
+  use_batch_norm: true
+  activation: 'relu'
+  
+  # 融合策略 - 晚期融合，因为模态差异较大
+  fusion_strategy: 'late'
+
+training:
+  # 训练参数
+  batch_size: 24
+  max_epochs: 120
+  learning_rate: 0.0008
+  weight_decay: 0.0002
+  num_workers: 4
+  
+  # 正则化
+  gradient_clip_val: 1.0
+  early_stopping_patience: 25
+  save_every: 12
+  
+  # 优化器
+  optimizer: 'adamw'
+  scheduler: 'cosine'
+
+data:
+  hdf5_path: 'data/processed/multimodal_data.h5'
+  use_cache: true
+  cache_size: 800
+  memory_limit: 6.0
+
+experiment:
+  name: 'stokes_images_dual'
+  description: 'Stokes参数和图像双模态分类器'
+  save_dir: 'experiments/stokes_images_dual'

@@ -1,0 +1,51 @@
+# 荧光信号和图像双模态分类配置
+# 结合光谱信息和视觉信息
+
+model:
+  # 基本参数
+  num_classes: 12
+  modalities: ['fluorescence', 'images']
+  
+  # 模态配置
+  fluorescence_dim: 16
+  fluorescence_length: 4000
+  image_channels: 3
+  image_size: 224
+  num_views: 3
+  
+  # 网络结构 - 平衡光谱和视觉特征
+  hidden_dims: [1024, 512, 256]
+  dropout_rate: 0.4
+  use_batch_norm: true
+  activation: 'relu'
+  
+  # 融合策略 - 晚期融合
+  fusion_strategy: 'late'
+
+training:
+  # 训练参数
+  batch_size: 20
+  max_epochs: 130
+  learning_rate: 0.0006
+  weight_decay: 0.0003
+  num_workers: 4
+  
+  # 正则化
+  gradient_clip_val: 1.0
+  early_stopping_patience: 25
+  save_every: 13
+  
+  # 优化器
+  optimizer: 'adamw'
+  scheduler: 'cosine'
+
+data:
+  hdf5_path: 'data/processed/multimodal_data.h5'
+  use_cache: true
+  cache_size: 700
+  memory_limit: 6.0
+
+experiment:
+  name: 'fluorescence_images_dual'
+  description: '荧光信号和图像双模态分类器'
+  save_dir: 'experiments/fluorescence_images_dual'

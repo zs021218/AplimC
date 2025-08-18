@@ -1,0 +1,53 @@
+# 全模态分类配置
+# 使用所有可用的模态：Stokes参数 + 荧光信号 + 图像
+
+model:
+  # 基本参数
+  num_classes: 12
+  modalities: ['stokes', 'fluorescence', 'images']
+  
+  # 全模态配置
+  stokes_dim: 4
+  stokes_length: 4000
+  fluorescence_dim: 16
+  fluorescence_length: 4000
+  image_channels: 3
+  image_size: 224
+  num_views: 3
+  
+  # 网络结构 - 复杂网络处理多模态信息
+  hidden_dims: [1024, 512, 256, 128]
+  dropout_rate: 0.4
+  use_batch_norm: true
+  activation: 'relu'
+  
+  # 融合策略 - 分层融合，先融合信号，再与图像融合
+  fusion_strategy: 'hierarchical'
+
+training:
+  # 训练参数
+  batch_size: 16
+  max_epochs: 150
+  learning_rate: 0.0005
+  weight_decay: 0.0005
+  num_workers: 4
+  
+  # 正则化
+  gradient_clip_val: 1.0
+  early_stopping_patience: 30
+  save_every: 15
+  
+  # 优化器
+  optimizer: 'adamw'
+  scheduler: 'cosine'
+
+data:
+  hdf5_path: 'data/processed/multimodal_data.h5'
+  use_cache: true
+  cache_size: 500  # 全模态数据量大，适当减少缓存
+  memory_limit: 8.0
+
+experiment:
+  name: 'full_multimodal'
+  description: '全模态（Stokes+荧光+图像）分类器'
+  save_dir: 'experiments/full_multimodal'

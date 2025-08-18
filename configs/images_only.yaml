@@ -1,0 +1,49 @@
+# 图像单模态分类配置
+# 仅基于三视图图像的分类器
+
+model:
+  # 基本参数
+  num_classes: 12
+  modalities: ['images']
+  
+  # 图像配置
+  image_channels: 3
+  image_size: 224
+  num_views: 3
+  
+  # 网络结构 - 针对图像任务优化
+  hidden_dims: [1024, 512, 256]
+  dropout_rate: 0.4
+  use_batch_norm: true
+  activation: 'relu'
+  
+  # 融合策略（单模态无需融合）
+  fusion_strategy: 'single'
+
+training:
+  # 训练参数 - 图像训练通常需要更小的batch size
+  batch_size: 16
+  max_epochs: 150
+  learning_rate: 0.0005
+  weight_decay: 0.0005
+  num_workers: 4
+  
+  # 正则化
+  gradient_clip_val: 1.0
+  early_stopping_patience: 30
+  save_every: 15
+  
+  # 优化器
+  optimizer: 'adamw'
+  scheduler: 'cosine'
+
+data:
+  hdf5_path: 'data/processed/multimodal_data.h5'
+  use_cache: true
+  cache_size: 500  # 图像占用内存较大，减少缓存
+  memory_limit: 6.0
+
+experiment:
+  name: 'images_only'
+  description: '仅使用三视图图像的分类器'
+  save_dir: 'experiments/images_only'

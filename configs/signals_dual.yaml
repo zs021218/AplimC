@@ -1,0 +1,50 @@
+# 信号双模态分类配置
+# 结合Stokes参数和荧光信号
+
+model:
+  # 基本参数
+  num_classes: 12
+  modalities: ['stokes', 'fluorescence']
+  
+  # 信号配置
+  stokes_dim: 4
+  stokes_length: 4000
+  fluorescence_dim: 16
+  fluorescence_length: 4000
+  
+  # 网络结构 - 平衡两种信号特征
+  hidden_dims: [512, 256, 128]
+  dropout_rate: 0.3
+  use_batch_norm: true
+  activation: 'relu'
+  
+  # 融合策略 - 早期融合，因为都是信号数据
+  fusion_strategy: 'early'
+
+training:
+  # 训练参数
+  batch_size: 32
+  max_epochs: 100
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  num_workers: 4
+  
+  # 正则化
+  gradient_clip_val: 1.0
+  early_stopping_patience: 20
+  save_every: 10
+  
+  # 优化器
+  optimizer: 'adamw'
+  scheduler: 'cosine'
+
+data:
+  hdf5_path: 'data/processed/multimodal_data.h5'
+  use_cache: true
+  cache_size: 1000
+  memory_limit: 5.0
+
+experiment:
+  name: 'signals_dual'
+  description: 'Stokes参数和荧光信号双模态分类器'
+  save_dir: 'experiments/signals_dual'

@@ -1,0 +1,93 @@
+# 多模态分类模型配置文件
+# 遵循奥卡姆剃刀原理，保持简洁有效
+
+# 模型配置
+model:
+  # 基本参数
+  num_classes: 12
+  modalities: ['stokes', 'fluorescence', 'images']  # 可选: 'stokes', 'fluorescence', 'images'
+  
+  # 模态维度配置
+  stokes_dim: 4
+  stokes_length: 4000
+  fluorescence_dim: 16
+  fluorescence_length: 4000
+  image_channels: 3
+  image_size: 224
+  num_views: 3
+  
+  # 融合策略
+  fusion_strategy: 'late'  # 'early', 'late', 'hierarchical'
+  
+  # 网络结构
+  hidden_dims: [512, 256, 128]
+  dropout_rate: 0.3
+  use_batch_norm: true
+  activation: 'relu'  # 'relu', 'gelu', 'swish'
+
+# 训练配置
+training:
+  # 基本参数
+  batch_size: 32
+  max_epochs: 100
+  learning_rate: 1e-3
+  weight_decay: 1e-4
+  
+  # 优化器和调度器
+  optimizer: 'adamw'  # 'adam', 'adamw', 'sgd'
+  scheduler: 'cosine'  # 'cosine', 'step', 'plateau', 'none'
+  
+  # 正则化
+  gradient_clip_val: 1.0
+  early_stopping_patience: 20
+  
+  # 保存设置
+  save_every: 10
+  
+  # 数据加载
+  num_workers: 4
+
+# 数据配置
+data:
+  # 数据路径
+  hdf5_path: "data/processed/multimodal_data.h5"
+  
+  # 数据分割
+  train_split: 0.7
+  val_split: 0.2
+  test_split: 0.1
+  
+  # 数据增强（训练时）
+  augmentation:
+    # 信号增强
+    signal_noise_std: 0.005
+    signal_noise_prob: 0.3
+    signal_crop_length: 3800
+    
+    # 图像增强
+    image_rotation_degrees: 10.0
+    image_rotation_prob: 0.4
+    image_hflip_prob: 0.5
+    image_vflip_prob: 0.2
+    image_brightness: 0.1
+    image_contrast: 0.1
+    image_saturation: 0.1
+    image_jitter_prob: 0.3
+  
+  # 归一化
+  normalization:
+    signal_norm_method: 'zscore'  # 'zscore', 'minmax', 'robust'
+    signal_norm_per_channel: true
+
+# 实验配置
+experiment:
+  name: "multimodal_classification"
+  output_dir: "experiments"
+  log_level: "INFO"
+  
+  # 设备配置
+  device: "auto"  # "auto", "cpu", "cuda", "cuda:0"
+  
+  # 重现性
+  seed: 42
+  deterministic: true
