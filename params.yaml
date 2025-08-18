@@ -4,6 +4,10 @@ preprocess:
   image_size: [224, 224]
   num_views: 3
   wavelengths: [445, 473, 520, 630]
+  # 内存优化参数
+  batch_size: 1000       # 进一步降低批处理大小
+  use_float32: true
+  memory_threshold: 0.85 # 更激进的内存阈值
 
 split:
   train_ratio: 0.7
