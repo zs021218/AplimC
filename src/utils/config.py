@@ -36,6 +36,7 @@ class ModelConfig:
     activation: str = 'relu'
     
     # 图像编码器特定参数
+    backbone: str = 'resnet18'  # 图像编码器骨干网络
     use_pretrained: bool = True
     freeze_layers: int = 6  # 冻结前6层
     attention_dim: int = 256
@@ -61,6 +62,7 @@ class ModelConfig:
     
     # 损失函数
     loss_weights: Optional[List[float]] = None
+    label_smoothing: float = 0.0  # 标签平滑参数
     
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> 'ModelConfig':

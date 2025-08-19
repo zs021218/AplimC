@@ -71,19 +71,21 @@ class SignalEncoder(nn.Module):
 
 
 class ImageEncoder(nn.Module):
-    """基于预训练ResNet的图像编码器 - 防止过拟合"""
+    """图像编码器 - 处理多视图图像，简化融合机制"""
     
     def __init__(
-        self, 
+        self,
         num_views: int = 3,
         output_dim: int = 256,
         dropout_rate: float = 0.3,
         pretrained: bool = True,
-        backbone: str = 'resnet18'  # 可选择 resnet18, resnet34, resnet50
+        backbone: str = 'resnet18',  # 可选择 resnet18, resnet34, resnet50
+        freeze_layers: int = 6  # 冻结的层数
     ):
         super().__init__()
         
         self.num_views = num_views
+        self.freeze_layers = freeze_layers
         
         # 选择预训练模型
         if backbone == 'resnet18':
@@ -119,13 +121,13 @@ class ImageEncoder(nn.Module):
     
     def _freeze_early_layers(self):
         """冻结早期层以防止过拟合"""
-        # 冻结前两个残差块
+        # 冻结指定数量的早期层
         for i, child in enumerate(self.view_encoder.children()):
-            if i < 6:  # 冻结conv1, bn1, relu, maxpool, layer1, layer2
+            if i < self.freeze_layers:  # 使用配置的冻结层数
                 for param in child.parameters():
                     param.requires_grad = False
         
-        logger.info("已冻结ResNet的早期层以防止过拟合")
+        logger.info(f"已冻结ResNet的前{self.freeze_layers}层以防止过拟合")
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x shape: (batch_size, num_views, height, width, channels)
@@ -238,7 +240,10 @@ class MultimodalClassifier(nn.Module):
             self.encoders['images'] = ImageEncoder(
                 num_views=config.num_views,
                 output_dim=256,
-                dropout_rate=config.dropout_rate
+                dropout_rate=config.dropout_rate,
+                pretrained=config.use_pretrained,
+                backbone=getattr(config, 'backbone', 'resnet18'),  # 传递backbone参数
+                freeze_layers=config.freeze_layers  # 传递冻结层数参数
             )
             encoder_dims.append(256)
         

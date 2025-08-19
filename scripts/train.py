@@ -44,8 +44,11 @@ def load_config(config_path: str) -> ModelConfig:
         return ModelConfig.from_file(config_path)
 
 
-def create_data_loaders(config: ModelConfig, data_path: str):
+def create_data_loaders(config: ModelConfig, data_path: str, full_config: dict = None):
     """创建数据加载器"""
+    # 提取数据增强配置
+    transform_config = full_config.get('data_augmentation', {}) if full_config else {}
+    
     # 训练数据加载器
     train_loader = create_default_dataloader(
         hdf5_path=data_path,
@@ -53,7 +56,8 @@ def create_data_loaders(config: ModelConfig, data_path: str):
         batch_size=config.batch_size,
         num_workers=config.num_workers,
         balanced=True,
-        use_cache=True
+        use_cache=True,
+        transform_config=transform_config  # 传递数据增强配置
     )
     
     # 验证数据加载器
@@ -63,7 +67,8 @@ def create_data_loaders(config: ModelConfig, data_path: str):
         batch_size=config.batch_size * 2,  # 验证时可以用更大的batch size
         num_workers=config.num_workers,
         balanced=False,
-        use_cache=True
+        use_cache=True,
+        transform_config=transform_config  # 验证时也传递配置（但只会用标准化）
     )
     
     return train_loader, val_loader
@@ -172,6 +177,15 @@ def main():
     
     # 加载配置
     logger.info(f"加载配置文件: {args.config}")
+    
+    # 先加载原始完整配置
+    if args.config.endswith('.yaml') or args.config.endswith('.yml'):
+        with open(args.config, 'r', encoding='utf-8') as f:
+            full_config_dict = yaml.safe_load(f)
+    else:
+        full_config_dict = {}
+    
+    # 然后创建ModelConfig对象
     config = load_config(args.config)
     
     # 命令行参数覆盖配置
@@ -188,7 +202,7 @@ def main():
     
     # 创建数据加载器
     logger.info(f"加载数据: {args.data}")
-    train_loader, val_loader = create_data_loaders(config, args.data)
+    train_loader, val_loader = create_data_loaders(config, args.data, full_config_dict)  # 传递完整配置
     logger.info(f"训练样本数: {len(train_loader.dataset)}")
     logger.info(f"验证样本数: {len(val_loader.dataset)}")
     

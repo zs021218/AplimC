@@ -1,0 +1,77 @@
+# 图像分类 - 标签平滑 + 强正则化版本
+# 使用标签平滑进一步防止过拟合
+
+model:
+  # 基本参数
+  num_classes: 12
+  modalities: ['images']
+  
+  # 图像配置
+  image_channels: 3
+  image_size: 224
+  num_views: 3
+  
+  # 网络结构 - 适中的容量
+  hidden_dims: [256, 128]
+  dropout_rate: 0.6           # 高dropout
+  use_batch_norm: true
+  activation: 'relu'
+  
+  # 图像编码器配置
+  backbone: 'resnet18'
+  pretrained: true
+  use_pretrained: true
+  freeze_layers: 3            # 适中的冻结层数
+  use_attention: false
+  
+  # 损失函数配置
+  label_smoothing: 0.15       # 标签平滑，防止过度自信
+
+training:
+  # 训练参数 - 防过拟合设置
+  batch_size: 32              # 适中的batch size
+  max_epochs: 100
+  learning_rate: 0.00005      # 较低的学习率
+  weight_decay: 0.015         # 强权重衰减
+  num_workers: 4
+  
+  # 正则化
+  gradient_clip_val: 0.8
+  early_stopping_patience: 15
+  save_every: 8
+  
+  # 优化器
+  optimizer: 'adamw'
+  scheduler: 'cosine'
+  
+  # 学习率调度
+  lr_scheduler_params:
+    T_max: 100
+    eta_min: 0.000005
+
+# 平衡的数据增强
+data_augmentation:
+  # 图像变换参数 - 平衡的数据增强
+  image_rotation_degrees: 25.0
+  image_rotation_prob: 0.7
+  image_hflip_prob: 0.7
+  image_vflip_prob: 0.4
+  image_brightness: 0.25
+  image_contrast: 0.25
+  image_saturation: 0.25
+  image_jitter_prob: 0.6
+  
+  # 信号增强
+  signal_noise_std: 0.015
+  signal_noise_prob: 0.5
+
+data:
+  hdf5_path: 'data/processed/multimodal_data.h5'
+  use_cache: true
+  cache_size: 300
+  memory_limit: 6.0
+
+experiment:
+  name: 'images_label_smoothing'
+  description: '标签平滑防过拟合图像分类器'
+  save_dir: 'experiments/images_label_smoothing'
