@@ -125,9 +125,14 @@ class MultimodalTrainer:
         # 设置损失函数
         if hasattr(self.config, 'loss_weights') and self.config.loss_weights:
             weights = torch.tensor(self.config.loss_weights, dtype=torch.float32)
-            self.criterion = nn.CrossEntropyLoss(weight=weights.to(self.device))
+            self.criterion = nn.CrossEntropyLoss(
+                weight=weights.to(self.device),
+                label_smoothing=getattr(self.config, 'label_smoothing', 0.0)
+            )
         else:
-            self.criterion = nn.CrossEntropyLoss()
+            self.criterion = nn.CrossEntropyLoss(
+                label_smoothing=getattr(self.config, 'label_smoothing', 0.0)
+            )
         
         # 设置优化器
         self.optimizer = self._create_optimizer(optimizer_name, learning_rate, weight_decay)

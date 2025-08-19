@@ -18,6 +18,7 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import json
 from sklearn.metrics import classification_report, confusion_matrix
 from tqdm import tqdm
 
@@ -34,16 +35,96 @@ def setup_logging(log_level: str = "INFO"):
     )
 
 
+def load_class_mapping(metadata_path: str = None):
+    """从元数据文件加载类别映射"""
+    if metadata_path is None:
+        # 默认路径
+        metadata_path = Path(__file__).parent.parent / "data" / "processed" / "metadata.json"
+    
+    try:
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        
+        class_map = metadata.get('class_map', {})
+        
+        # 创建从索引到类别名称的映射
+        idx_to_class = {v: k for k, v in class_map.items()}
+        
+        # 确保索引是连续的，并按顺序排列
+        max_idx = max(idx_to_class.keys()) if idx_to_class else -1
+        class_names = []
+        
+        for i in range(max_idx + 1):
+            if i in idx_to_class:
+                class_names.append(idx_to_class[i])
+            else:
+                class_names.append(f"Class_{i}")
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"加载类别映射: {class_names}")
+        
+        return class_names
+    
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"加载类别映射失败: {e}, 使用默认类别名称")
+        return None
+
+
 def load_model(checkpoint_path: str, device: torch.device):
     """加载模型"""
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
     # 从检查点恢复配置
-    config = ModelConfig.from_dict(checkpoint['config'])
+    config_dict = checkpoint['config']
+    logger = logging.getLogger(__name__)
+    
+    # 打印检查点配置信息
+    logger.info(f"检查点配置: modalities={config_dict.get('modalities')}")
+    logger.info(f"检查点配置: hidden_dims={config_dict.get('hidden_dims')}")
+    logger.info(f"检查点配置: fusion_strategy={config_dict.get('fusion_strategy')}")
+    
+    # 使用检查点中保存的确切配置创建ModelConfig
+    config = ModelConfig.from_dict({'model': config_dict})
     
     # 创建模型
     model = MultimodalClassifier(config)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    
+    # 尝试加载状态字典，使用严格匹配
+    try:
+        model.load_state_dict(checkpoint['model_state_dict'], strict=True)
+        logger.info("成功加载所有模型参数")
+    except RuntimeError as e:
+        logger.warning(f"严格加载失败，尝试部分加载: {e}")
+        # 如果严格加载失败，使用部分加载
+        model_dict = model.state_dict()
+        checkpoint_dict = checkpoint['model_state_dict']
+        
+        # 过滤出形状匹配的参数
+        filtered_dict = {}
+        skipped_keys = []
+        
+        for k, v in checkpoint_dict.items():
+            if k in model_dict:
+                if model_dict[k].shape == v.shape:
+                    filtered_dict[k] = v
+                else:
+                    skipped_keys.append(f"{k} (shape mismatch: checkpoint {v.shape} vs model {model_dict[k].shape})")
+            else:
+                skipped_keys.append(f"{k} (not found in model)")
+        
+        # 更新模型参数
+        model_dict.update(filtered_dict)
+        model.load_state_dict(model_dict)
+        
+        logger.warning(f"成功加载 {len(filtered_dict)}/{len(checkpoint_dict)} 个参数")
+        if skipped_keys:
+            logger.warning("跳过的参数:")
+            for key in skipped_keys[:10]:  # 只显示前10个
+                logger.warning(f"  - {key}")
+            if len(skipped_keys) > 10:
+                logger.warning(f"  ... 还有 {len(skipped_keys) - 10} 个参数被跳过")
+    
     model.to(device)
     model.eval()
     
@@ -201,7 +282,13 @@ def main():
         '--class-names',
         nargs='+',
         default=None,
-        help='类别名称列表'
+        help='类别名称列表（如果不指定，将从metadata.json自动加载）'
+    )
+    parser.add_argument(
+        '--metadata-path',
+        type=str,
+        default=None,
+        help='元数据文件路径（默认使用data/processed/metadata.json）'
     )
     
     args = parser.parse_args()
@@ -239,9 +326,19 @@ def main():
     
     logger.info(f"评估样本数: {len(data_loader.dataset)}")
     
+    # 确定类别名称
+    if args.class_names:
+        class_names = args.class_names
+        logger.info(f"使用用户指定的类别名称: {class_names}")
+    else:
+        class_names = load_class_mapping(args.metadata_path)
+        if class_names is None:
+            class_names = [f"Class_{i}" for i in range(12)]  # 默认12个类别
+            logger.info(f"使用默认类别名称: {class_names}")
+    
     # 评估模型
     logger.info("开始评估...")
-    results = evaluate_model(model, data_loader, device, args.class_names)
+    results = evaluate_model(model, data_loader, device, class_names)
     
     # 打印结果
     logger.info(f"准确率: {results['accuracy']:.4f}")
