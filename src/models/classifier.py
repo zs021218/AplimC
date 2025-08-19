@@ -104,7 +104,7 @@ class ImageEncoder(nn.Module):
         # 冻结早期层以防止过拟合
         self._freeze_early_layers()
         
-        # 多视图融合层
+        # 多视图融合层 - 简化版本，移除注意力机制
         self.view_fusion = nn.Sequential(
             nn.Dropout(dropout_rate),
             nn.Linear(feature_dim * num_views, output_dim * 2),
@@ -115,15 +115,7 @@ class ImageEncoder(nn.Module):
             nn.ReLU(inplace=True)
         )
         
-        # 注意力机制用于多视图融合
-        self.attention = nn.Sequential(
-            nn.Linear(feature_dim, 128),
-            nn.ReLU(inplace=True),
-            nn.Linear(128, 1),
-            nn.Sigmoid()
-        )
-        
-        logger.info(f"使用预训练{backbone}作为图像编码器骨干网络")
+        logger.info(f"使用预训练{backbone}作为图像编码器骨干网络（简化融合）")
     
     def _freeze_early_layers(self):
         """冻结早期层以防止过拟合"""
@@ -139,9 +131,8 @@ class ImageEncoder(nn.Module):
         # x shape: (batch_size, num_views, height, width, channels)
         batch_size = x.shape[0]
         
-        # 处理每个视图
+        # 处理每个视图，简单拼接而不使用注意力机制
         view_features = []
-        attention_weights = []
         
         for i in range(self.num_views):
             # 调整维度: (batch, H, W, C) -> (batch, C, H, W)
@@ -151,24 +142,10 @@ class ImageEncoder(nn.Module):
             view_feat = self.view_encoder(view)  # (batch, feature_dim, 1, 1)
             view_feat = view_feat.squeeze(-1).squeeze(-1)  # (batch, feature_dim)
             
-            # 计算注意力权重
-            attention = self.attention(view_feat)  # (batch, 1)
-            
             view_features.append(view_feat)
-            attention_weights.append(attention)
         
-        # 使用注意力机制融合多视图特征
-        stacked_features = torch.stack(view_features, dim=1)  # (batch, num_views, feature_dim)
-        stacked_weights = torch.stack(attention_weights, dim=1)  # (batch, num_views, 1)
-        
-        # 归一化注意力权重
-        stacked_weights = F.softmax(stacked_weights, dim=1)
-        
-        # 加权特征融合
-        weighted_features = stacked_features * stacked_weights
-        
-        # 简单拼接所有视图特征（包含注意力信息）
-        fused_features = weighted_features.view(batch_size, -1)  # (batch, num_views * feature_dim)
+        # 简单拼接所有视图特征
+        fused_features = torch.cat(view_features, dim=1)  # (batch, num_views * feature_dim)
         
         # 最终输出
         output = self.view_fusion(fused_features)

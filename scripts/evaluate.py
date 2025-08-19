@@ -114,9 +114,9 @@ def plot_confusion_matrix(cm, class_names, save_path=None):
         xticklabels=class_names,
         yticklabels=class_names
     )
-    plt.title('混淆矩阵')
-    plt.xlabel('预测标签')
-    plt.ylabel('真实标签')
+    plt.title('Confusion Matrix')
+    plt.xlabel('Predicted Label')
+    plt.ylabel('True Label')
     plt.tight_layout()
     
     if save_path:
@@ -147,7 +147,7 @@ def plot_classification_report(report, save_path=None):
         xticklabels=['Precision', 'Recall', 'F1-Score'],
         yticklabels=labels
     )
-    plt.title('分类性能指标')
+    plt.title('Classification Performance Metrics')
     plt.tight_layout()
     
     if save_path:

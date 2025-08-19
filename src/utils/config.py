@@ -35,6 +35,11 @@ class ModelConfig:
     use_batch_norm: bool = True
     activation: str = 'relu'
     
+    # 图像编码器特定参数
+    use_pretrained: bool = True
+    freeze_layers: int = 6  # 冻结前6层
+    attention_dim: int = 256
+    
     # 融合策略
     fusion_strategy: str = 'late'  # 'early', 'late', 'hierarchical'
     

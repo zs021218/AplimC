@@ -7,6 +7,7 @@
 import os
 import time
 import logging
+import math
 from typing import Dict, List, Optional, Tuple, Union
 from pathlib import Path
 
@@ -24,6 +25,30 @@ from ..utils.utils import count_parameters, analyze_model
 from ..data import create_default_dataloader
 
 logger = logging.getLogger(__name__)
+
+
+class CosineAnnealingWarmupRestarts(optim.lr_scheduler._LRScheduler):
+    """
+    带Warmup的余弦退火调度器
+    """
+    def __init__(self, optimizer, T_max, eta_min=0, warmup_epochs=0, warmup_start_lr=0, last_epoch=-1):
+        self.T_max = T_max
+        self.eta_min = eta_min
+        self.warmup_epochs = warmup_epochs
+        self.warmup_start_lr = warmup_start_lr
+        super(CosineAnnealingWarmupRestarts, self).__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        if self.last_epoch < self.warmup_epochs:
+            # Warmup阶段
+            return [self.warmup_start_lr + (base_lr - self.warmup_start_lr) * self.last_epoch / self.warmup_epochs
+                    for base_lr in self.base_lrs]
+        else:
+            # 余弦退火阶段
+            progress = (self.last_epoch - self.warmup_epochs) / (self.T_max - self.warmup_epochs)
+            return [self.eta_min + (base_lr - self.eta_min) * 
+                    (1 + math.cos(math.pi * progress)) / 2
+                    for base_lr in self.base_lrs]
 
 
 class MultimodalTrainer:
@@ -151,11 +176,31 @@ class MultimodalTrainer:
                 self.optimizer,
                 T_max=self.config.max_epochs
             )
+        elif scheduler_name.lower() == 'cosine_with_warmup':
+            # 获取调度器参数
+            lr_params = getattr(self.config, 'lr_scheduler_params', {})
+            T_max = lr_params.get('T_max', self.config.max_epochs)
+            eta_min = lr_params.get('eta_min', 0)
+            warmup_epochs = lr_params.get('warmup_epochs', 0)
+            warmup_start_lr = lr_params.get('warmup_start_lr', 0)
+            
+            return CosineAnnealingWarmupRestarts(
+                self.optimizer,
+                T_max=T_max,
+                eta_min=eta_min,
+                warmup_epochs=warmup_epochs,
+                warmup_start_lr=warmup_start_lr
+            )
         elif scheduler_name.lower() == 'step':
+            # 获取step调度器参数
+            lr_params = getattr(self.config, 'lr_scheduler_params', {})
+            step_size = lr_params.get('step_size', 30)
+            gamma = lr_params.get('gamma', 0.1)
+            
             return optim.lr_scheduler.StepLR(
                 self.optimizer,
-                step_size=30,
-                gamma=0.1
+                step_size=step_size,
+                gamma=gamma
             )
         elif scheduler_name.lower() == 'plateau':
             return optim.lr_scheduler.ReduceLROnPlateau(
