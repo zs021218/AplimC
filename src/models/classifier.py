@@ -18,6 +18,49 @@ from ..utils.config import ModelConfig
 logger = logging.getLogger(__name__)
 
 
+def _create_resnet_model(backbone: str, pretrained: bool):
+    """创建ResNet模型，兼容不同torchvision版本"""
+    try:
+        # 尝试使用新的weights API (torchvision >= 0.13)
+        if backbone == 'resnet18':
+            if pretrained:
+                model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+            else:
+                model = models.resnet18(weights=None)
+            feature_dim = 512
+        elif backbone == 'resnet34':
+            if pretrained:
+                model = models.resnet34(weights=models.ResNet34_Weights.DEFAULT)
+            else:
+                model = models.resnet34(weights=None)
+            feature_dim = 512
+        elif backbone == 'resnet50':
+            if pretrained:
+                model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+            else:
+                model = models.resnet50(weights=None)
+            feature_dim = 2048
+        else:
+            raise ValueError(f"不支持的backbone: {backbone}")
+            
+    except AttributeError:
+        # 回退到旧的pretrained API (torchvision < 0.13)
+        logger.warning("使用旧版torchvision API，建议升级到最新版本")
+        if backbone == 'resnet18':
+            model = models.resnet18(pretrained=pretrained)
+            feature_dim = 512
+        elif backbone == 'resnet34':
+            model = models.resnet34(pretrained=pretrained)
+            feature_dim = 512
+        elif backbone == 'resnet50':
+            model = models.resnet50(pretrained=pretrained)
+            feature_dim = 2048
+        else:
+            raise ValueError(f"不支持的backbone: {backbone}")
+    
+    return model, feature_dim
+
+
 class SignalEncoder(nn.Module):
     """信号编码器 - 简单的1D CNN + 全连接"""
     
@@ -88,17 +131,7 @@ class ImageEncoder(nn.Module):
         self.freeze_layers = freeze_layers
         
         # 选择预训练模型
-        if backbone == 'resnet18':
-            resnet = models.resnet18(pretrained=pretrained)
-            feature_dim = 512
-        elif backbone == 'resnet34':
-            resnet = models.resnet34(pretrained=pretrained)
-            feature_dim = 512
-        elif backbone == 'resnet50':
-            resnet = models.resnet50(pretrained=pretrained)
-            feature_dim = 2048
-        else:
-            raise ValueError(f"不支持的backbone: {backbone}")
+        resnet, feature_dim = _create_resnet_model(backbone, pretrained)
         
         # 移除最后的分类层
         self.view_encoder = nn.Sequential(*list(resnet.children())[:-1])
