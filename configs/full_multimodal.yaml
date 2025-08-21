@@ -16,30 +16,61 @@ model:
   num_views: 3
   
   # 网络结构 - 复杂网络处理多模态信息
-  hidden_dims: [1024, 512, 256, 128]
-  dropout_rate: 0.4
+  hidden_dims: [512, 256, 128]
+  dropout_rate: 0.4           # 高dropout防过拟合
   use_batch_norm: true
   activation: 'relu'
   
-  # 融合策略 - 分层融合，先融合信号，再与图像融合
-  fusion_strategy: 'hierarchical'
+  # 图像编码器配置（使用标签平滑优化配置）
+  backbone: 'resnet18'
+  pretrained: true
+  use_pretrained: true
+  freeze_layers: 3            # 适中的冻结层数
+  use_attention: false
+  
+  # 损失函数配置
+  label_smoothing: 0.15       # 标签平滑，防止过度自信
+  
+  # 融合策略 - 注意力融合，自适应权重分配
+  fusion_strategy: 'contact'
 
 training:
-  # 训练参数
-  batch_size: 16
+  # 训练参数（使用标签平滑优化配置）
+  batch_size: 24              # 全模态数据量大，稍小的batch size
   max_epochs: 150
-  learning_rate: 0.0005
-  weight_decay: 0.0005
+  learning_rate: 0.00005      # 较低的学习率
+  weight_decay: 0.015         # 强权重衰减
   num_workers: 4
   
   # 正则化
-  gradient_clip_val: 1.0
+  gradient_clip_val: 0.8
   early_stopping_patience: 30
   save_every: 15
   
   # 优化器
   optimizer: 'adamw'
   scheduler: 'cosine'
+  
+  # 学习率调度
+  lr_scheduler_params:
+    T_max: 150
+    eta_min: 0.000005
+
+# 平衡的数据增强
+data_augmentation:
+  # 图像变换参数 - 平衡的数据增强
+  image_rotation_degrees: 25.0
+  image_rotation_prob: 0.7
+  image_hflip_prob: 0.7
+  image_vflip_prob: 0.4
+  image_brightness: 0.25
+  image_contrast: 0.25
+  image_saturation: 0.25
+  image_jitter_prob: 0.6
+  
+  # 信号增强
+  signal_noise_std: 0.015
+  signal_noise_prob: 0.5
 
 data:
   hdf5_path: 'data/processed/multimodal_data.h5'

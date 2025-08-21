@@ -5,7 +5,7 @@ AplimC - 多模态藻类分类项目
 """
 
 __version__ = "2.0.0"
-__author__ = "AplimC Team"
+__author__ = "Sen Zhang"
 __description__ = "多模态藻类分类系统 - 支持Stokes参数、荧光信号和多视图图像"
 
 # 核心模块导入
