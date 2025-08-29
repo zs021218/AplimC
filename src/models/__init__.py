@@ -26,6 +26,11 @@ from .knowledge_distillation import (
     DistillationLoss
 )
 
+from .simple_kd import (
+    SimpleTeacher,
+    SimpleStudent
+)
+
 __version__ = "1.0.0"
 __all__ = [
     # 核心模型
