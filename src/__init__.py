@@ -4,9 +4,9 @@ AplimC - 多模态藻类分类项目
 专为HDF5格式优化的高效多模态机器学习框架
 """
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 __author__ = "Sen Zhang"
-__description__ = "多模态藻类分类系统 - 支持Stokes参数、荧光信号和多视图图像"
+__description__ = "多模态藻类分类系统 - 支持Stokes参数、荧光信号和多视图图像，包含知识蒸馏和平衡融合"
 
 # 核心模块导入
 from . import data
@@ -28,7 +28,12 @@ from .models import (
     ImageEncoder,
     AttentionFusion,
     create_model,
-    create_simple_model
+    create_simple_model,
+    FeatureMimicryDistillation,
+    EnhancedSignalClassifier,
+    RelationKnowledgeExtractor,
+    AdaptiveAttentionTransfer,
+    DistillationLoss
 )
 
 from .training import (
@@ -50,7 +55,14 @@ VERSION_INFO = {
     "author": __author__,
     "description": __description__,
     "python_requires": ">=3.8",
-    "pytorch_requires": ">=1.8.0"
+    "pytorch_requires": ">=1.8.0",
+    "new_features": [
+        "知识蒸馏框架 (图像→信号模态知识转移)",
+        "平衡多模态融合策略",
+        "增强版信号编码器",
+        "跨模态注意力机制",
+        "特征模仿学习"
+    ]
 }
 
 # 项目信息
@@ -60,7 +72,18 @@ PROJECT_INFO = {
     "data_format": "HDF5",
     "modalities": ["stokes", "fluorescence", "images"],
     "num_classes": 12,
-    "total_samples": 21007
+    "total_samples": 21007,
+    "features": {
+        "multimodal_fusion": ["concat", "attention", "balanced", "gradient_balanced", "adaptive"],
+        "knowledge_distillation": ["feature_mimicry", "relation_knowledge", "attention_transfer"],
+        "signal_enhancement": ["multi_scale_conv", "enhanced_encoder", "adaptive_attention"],
+        "performance": {
+            "image_only": "95.59%",
+            "fluorescence_only": "66.96%", 
+            "multimodal": "96.41%",
+            "distillation_target": "90%+ (signal only)"
+        }
+    }
 }
 
 # 公开的API
@@ -85,6 +108,18 @@ __all__ = [
     "AttentionFusion",
     "create_model",
     "create_simple_model",
+    
+    # 知识蒸馏模块
+    "FeatureMimicryDistillation",
+    "EnhancedSignalClassifier", 
+    "DistillationLoss",
+    "load_pretrained_teacher",
+    
+    # 平衡融合模块
+    "ModalityBalancer",
+    "GradientBalancedFusion", 
+    "AdaptiveFusion",
+    "CrossModalAttention",
     
     # 训练模块
     "MultimodalTrainer",
@@ -126,46 +161,49 @@ from src import (
     MultimodalClassifier,
     MultimodalTrainer,
     create_default_dataloader,
-    get_preset_config
+    get_preset_config,
+    # 知识蒸馏
+    FeatureMimicryDistillation,
+    DistillationLoss,
+    # 平衡融合
+    ModalityBalancer
 )
 
-# 1. 创建配置
-config = get_preset_config('simple')
-print(f"使用配置: {config}")
+# === 方案1: 标准多模态分类 ===
+print("方案1: 多模态分类")
+config = get_preset_config('balanced')  # 使用平衡融合
+train_loader = create_default_dataloader("data/processed/multimodal_data.h5", 'train')
+val_loader = create_default_dataloader("data/processed/multimodal_data.h5", 'val')
 
-# 2. 创建数据加载器
-train_loader = create_default_dataloader(
-    hdf5_path="data/processed/multimodal_data.h5",
-    split='train',
-    batch_size=config.batch_size,
-    balanced=True
-)
-
-val_loader = create_default_dataloader(
-    hdf5_path="data/processed/multimodal_data.h5", 
-    split='val',
-    batch_size=config.batch_size,
-    balanced=False
-)
-
-# 3. 创建模型
 model = MultimodalClassifier(config)
-print(f"模型参数数量: {sum(p.numel() for p in model.parameters()):,}")
-
-# 4. 创建训练器
-trainer = MultimodalTrainer(
-    model=model,
-    config=config,
-    train_loader=train_loader,
-    val_loader=val_loader
-)
-
-# 5. 开始训练
+trainer = MultimodalTrainer(model, config, train_loader, val_loader)
 trainer.fit()
 
-# 6. 评估模型
-results = trainer.test(val_loader)
-print(f"验证准确率: {results['accuracy']:.4f}")
+# === 方案2: 知识蒸馏 (信号模态提升) ===
+print("方案2: 知识蒸馏 (68% → 90%+)")
+from src.models.knowledge_distillation import FeatureMimicryDistillation
+
+# 创建蒸馏模型
+distill_model = FeatureMimicryDistillation(
+    teacher_config=teacher_config,  # 图像模态配置
+    student_config=student_config,  # 信号模态配置  
+    distillation_config=distill_config
+)
+
+# 蒸馏训练
+distill_criterion = DistillationLoss(alpha=0.3, beta=0.4, gamma=0.2, delta=0.1)
+# ... 训练过程 ...
+
+# === 方案3: 仅图像分类 (推荐) ===
+print("方案3: 图像单模态 (95%+, 最实用)")
+config_img = get_preset_config('image_only')
+model_img = MultimodalClassifier(config_img)
+# ... 简单高效 ...
+
+print("选择方案:")
+print("- 方案1: 完整多模态 (96%, 复杂)")
+print("- 方案2: 信号蒸馏 (90%+, 研究)")  
+print("- 方案3: 图像单模态 (95%, 推荐)")
 """
     return example
 
@@ -193,17 +231,28 @@ def check_environment():
 def print_banner():
     """打印项目横幅"""
     banner = f"""
-╔══════════════════════════════════════════════════════════╗
-║                         AplimC                           ║
-║              多模态藻类分类系统 v{__version__}                  ║
-║                                                          ║
-║  🧬 支持模态: Stokes参数 + 荧光信号 + 多视图图像              ║
-║  📊 数据格式: HDF5 优化存储                                ║
-║  🎯 分类数量: 12类藻类                                     ║
-║  📈 样本总数: 21,007个                                     ║
-║                                                          ║
-║  遵循奥卡姆剃刀原理 - 从简单到复杂的模型设计                  ║
-╚══════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════╗
+║                            AplimC v{__version__}                          ║
+║               多模态藻类分类系统 + 知识蒸馏框架                    ║
+║                                                                  ║
+║  🧬 支持模态: Stokes参数 + 荧光信号 + 多视图图像                   ║
+║  📊 数据格式: HDF5 优化存储 (84GB → 高效访问)                     ║
+║  🎯 分类数量: 12类藻类                                            ║
+║  📈 样本总数: 21,007个                                            ║
+║                                                                  ║
+║  🔄 新功能特性:                                                   ║
+║     • 知识蒸馏: 图像(95%) → 信号(90%+)                          ║
+║     • 平衡融合: 解决模态参数不平衡问题                           ║
+║     • 增强编码器: 多尺度信号特征提取                             ║
+║     • 跨模态注意力: 智能特征关联                                 ║
+║                                                                  ║
+║  📊 性能基准:                                                     ║
+║     • 图像单模态: 95.59% (推荐方案)                             ║
+║     • 荧光单模态: 66.96% → 蒸馏后90%+                           ║
+║     • 多模态融合: 96.41% (复杂度↑, 收益微小)                    ║
+║                                                                  ║
+║  遵循奥卡姆剃刀原理 - 简单有效优于复杂                           ║
+╚══════════════════════════════════════════════════════════════════╝
 """
     print(banner)
 

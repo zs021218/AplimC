@@ -17,6 +17,15 @@ from .classifier import (
     create_simple_model
 )
 
+# 知识蒸馏相关类
+from .knowledge_distillation import (
+    FeatureMimicryDistillation,
+    EnhancedSignalClassifier,
+    RelationKnowledgeExtractor,
+    AdaptiveAttentionTransfer,
+    DistillationLoss
+)
+
 __version__ = "1.0.0"
 __all__ = [
     # 核心模型
@@ -26,7 +35,13 @@ __all__ = [
     "AttentionFusion",
     "ModelConfig",
     "create_model",
-    "create_simple_model"
+    "create_simple_model",
+    # 知识蒸馏
+    "FeatureMimicryDistillation",
+    "EnhancedSignalClassifier", 
+    "RelationKnowledgeExtractor",
+    "AdaptiveAttentionTransfer",
+    "DistillationLoss"
 ]
 
 
