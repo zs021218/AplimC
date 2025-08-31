@@ -1,0 +1,7 @@
+ python scripts/train.py \
+        --config configs/signals_dual.yaml \
+        --data "data/processed/multimodal_data.h5" \
+        --gpu 1 \
+        --name "signals_dual_$(date +%Y%m%d_%H%M%S)"
+
+python scripts/train.py         --config configs/signals_dual.yaml         --data "data/processed/multimodal_data.h5"         --gpu 1         --name "signals_dual_TCNandTransformer_zscore_lr0.0001_notGauss"
