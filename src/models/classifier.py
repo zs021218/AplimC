@@ -4,6 +4,7 @@
 支持灵活的模态选择和配置
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -112,6 +113,160 @@ class SignalEncoder(nn.Module):
         x = self.fc(x)
         return x
 
+
+import torch
+import torch.nn as nn
+from torch.nn.utils import weight_norm
+
+class Chomp1d(nn.Module):
+    """因果卷积需要裁剪掉右侧多余的填充部分"""
+    def __init__(self, chomp_size):
+        super(Chomp1d, self).__init__()
+        self.chomp_size = chomp_size
+
+    def forward(self, x):
+        return x[:, :, :-self.chomp_size].contiguous()
+
+class TemporalBlock(nn.Module):
+    """TCN 的基础残差块"""
+    def __init__(self, n_inputs, n_outputs, kernel_size, stride, dilation, padding, dropout=0.2):
+        super(TemporalBlock, self).__init__()
+        # 第一层卷积
+        self.conv1 = weight_norm(nn.Conv1d(n_inputs, n_outputs, kernel_size,
+                                           stride=stride, padding=padding, dilation=dilation))
+        self.chomp1 = Chomp1d(padding)  # 裁剪以保证因果性
+        self.relu1 = nn.ReLU()
+        self.dropout1 = nn.Dropout(dropout)
+
+        # 第二层卷积
+        self.conv2 = weight_norm(nn.Conv1d(n_outputs, n_outputs, kernel_size,
+                                           stride=stride, padding=padding, dilation=dilation))
+        self.chomp2 = Chomp1d(padding)
+        self.relu2 = nn.ReLU()
+        self.dropout2 = nn.Dropout(dropout)
+
+        # 残差连接
+        self.net = nn.Sequential(self.conv1, self.chomp1, self.relu1, self.dropout1,
+                                 self.conv2, self.chomp2, self.relu2, self.dropout2)
+        self.downsample = nn.Conv1d(n_inputs, n_outputs, 1) if n_inputs != n_outputs else None
+        self.relu = nn.ReLU()
+        self.init_weights()
+
+    def init_weights(self):
+        self.conv1.weight.data.normal_(0, 0.01)
+        self.conv2.weight.data.normal_(0, 0.01)
+        if self.downsample is not None:
+            self.downsample.weight.data.normal_(0, 0.01)
+
+    def forward(self, x):
+        out = self.net(x)
+        res = x if self.downsample is None else self.downsample(x)
+        return self.relu(out + res)  # 残差连接
+
+class TCNEncoder(nn.Module):
+    """基于TCN的信号编码器"""
+    
+    def __init__(self, input_channels, output_dim, num_channels=[64, 128, 256], kernel_size=3, dropout_rate=0.2):
+        super(TCNEncoder, self).__init__()
+        layers = []
+        num_levels = len(num_channels)
+        
+        # 构建TCN堆叠
+        for i in range(num_levels):
+            dilation_size = 2 ** i  # 膨胀系数指数增长：1, 2, 4, 8...
+            in_channels = input_channels if i == 0 else num_channels[i-1]
+            out_channels = num_channels[i]
+            layers += [TemporalBlock(in_channels, out_channels, kernel_size, stride=1, dilation=dilation_size,
+                                     padding=(kernel_size-1)*dilation_size, dropout=dropout_rate)]
+        
+        self.tcn = nn.Sequential(*layers)
+        # 全局平均池化 + 输出层
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Linear(num_channels[-1], output_dim)
+        
+    def forward(self, x):
+        # x shape: [Batch, Channels, Length]
+        x = self.tcn(x)          # 通过TCN提取特征
+        x = self.avg_pool(x)     # 全局平均池化 [B, C, 1]
+        x = x.squeeze(-1)        # 移除时间维 [B, C]
+        x = self.fc(x)           # 投影到输出维度 [B, output_dim]
+        return x
+
+
+class PositionalEncoding(nn.Module):
+    """添加位置编码，因为Transformer本身没有位置信息"""
+    def __init__(self, d_model, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe.unsqueeze(0)) # [1, max_len, d_model]
+
+    def forward(self, x):
+        # x: [Batch, Seq_len, Features]
+        return x + self.pe[:, :x.size(1), :]
+    
+class HybridSignalEncoder(nn.Module):
+    """TCN+Transformer混合编码器"""
+    
+    def __init__(self, input_channels, output_dim=256, tcn_channels=[64, 128, 256], 
+                 d_model=256, nhead=8, num_layers=2, dropout_rate=0.1):
+        super().__init__()
+        
+        # 1. TCN前端：提取局部特征
+        self.tcn = TCNEncoder(
+            input_channels=input_channels,
+            output_dim=tcn_channels[-1], # 输出TCN的最终通道数
+            num_channels=tcn_channels,
+            kernel_size=5,
+            dropout_rate=dropout_rate
+        )
+        
+        # 2. Transformer后端：建模全局依赖
+        self.input_projection = nn.Linear(tcn_channels[-1], d_model)
+        self.pos_encoder = PositionalEncoding(d_model)
+        
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, dim_feedforward=4*d_model, 
+            dropout=dropout_rate, batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # 3. 输出投影层：将d_model维度映射到最终的output_dim
+        self.output_projection = nn.Sequential(
+            nn.Linear(d_model, output_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate)
+        )
+        
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
+        
+    def forward(self, x):
+        # x: [Batch, Channels, Seq_len]
+        
+        # 1. TCN提取局部特征: [Batch, TCN_out_channels, Seq_len]
+        local_features = self.tcn(x)
+        
+        # 2. 准备Transformer输入
+        batch_size, features, seq_len = local_features.shape
+        x = local_features.permute(0, 2, 1) # [Batch, Seq_len, Features]
+        
+        # 3. 投影到Transformer维度
+        x = self.input_projection(x) # [Batch, Seq_len, d_model]
+        x = self.pos_encoder(x)
+        
+        # 4. Transformer处理全局关系
+        x = self.transformer_encoder(x) # [Batch, Seq_len, d_model]
+        
+        # 5. 全局平均池化（对序列维度）
+        x = x.mean(dim=1) # [Batch, d_model] - 替代permute+pool的方式
+        
+        # 6. 投影到最终输出维度
+        x = self.output_projection(x) # [Batch, output_dim]
+        
+        return x
 
 class ImageEncoder(nn.Module):
     """图像编码器 - 处理多视图图像，简化融合机制"""
@@ -250,9 +405,10 @@ class MultimodalClassifier(nn.Module):
         
         # 检查是否使用 Stokes 参数
         if 'stokes' in config.modalities:
-            self.encoders['stokes'] = SignalEncoder(
+            self.encoders['stokes'] = HybridSignalEncoder(
                 input_channels=config.stokes_dim,
-                input_length=config.stokes_length,
+                #input_length=config.stokes_length,
+                
                 output_dim=256,
                 dropout_rate=config.dropout_rate
             )
@@ -260,9 +416,10 @@ class MultimodalClassifier(nn.Module):
         
         # 检查是否使用荧光信号
         if 'fluorescence' in config.modalities:
-            self.encoders['fluorescence'] = SignalEncoder(
+            self.encoders['fluorescence'] = HybridSignalEncoder(
                 input_channels=config.fluorescence_dim,
-                input_length=config.fluorescence_length,
+                #input_length=config.fluorescence_length,
+
                 output_dim=256,
                 dropout_rate=config.dropout_rate
             )
