@@ -9,6 +9,7 @@ from typing import List
 # 核心模型类
 from .classifier import (
     MultimodalClassifier,
+    TCNEncoder,
     SignalEncoder,
     ImageEncoder,
     AttentionFusion,
@@ -17,14 +18,7 @@ from .classifier import (
     create_simple_model
 )
 
-# 知识蒸馏相关类
-from .knowledge_distillation import (
-    FeatureMimicryDistillation,
-    EnhancedSignalClassifier,
-    RelationKnowledgeExtractor,
-    AdaptiveAttentionTransfer,
-    DistillationLoss
-)
+
 
 from .simple_kd import (
     SimpleTeacher,
@@ -41,12 +35,7 @@ __all__ = [
     "ModelConfig",
     "create_model",
     "create_simple_model",
-    # 知识蒸馏
-    "FeatureMimicryDistillation",
-    "EnhancedSignalClassifier", 
-    "RelationKnowledgeExtractor",
-    "AdaptiveAttentionTransfer",
-    "DistillationLoss"
+
 ]
 
 

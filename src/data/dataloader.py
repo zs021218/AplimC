@@ -48,13 +48,12 @@ class BalancedBatchSampler(Sampler):
         """构建每个类别的样本索引"""
         class_indices = {i: [] for i in range(self.dataset.num_classes)}
         
-        # 读取所有标签
+        # 使用数据集的__getitem__方法来获取重新映射后的标签
         with torch.no_grad():
             for idx in range(len(self.dataset)):
-                # 直接从HDF5读取标签，避免加载完整样本
-                import h5py
-                with h5py.File(self.dataset.hdf5_path, 'r') as f:
-                    label = f[self.dataset.split]['labels'][idx]
+                # 使用数据集的标签（已经过滤和重新映射）
+                sample = self.dataset[idx]
+                label = sample['labels'].item()
                 class_indices[int(label)].append(idx)
         
         # 打乱每个类别的索引

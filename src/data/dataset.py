@@ -27,7 +27,8 @@ class MultimodalHDF5Dataset(Dataset):
         transform: Optional[callable] = None,
         load_modalities: List[str] = ['stokes', 'fluorescence', 'images'],
         cache_size: int = 100,
-        memory_map: bool = True
+        memory_map: bool = True,
+        selected_classes: Optional[Union[List[str], List[int]]] = None
     ):
         """
         初始化HDF5数据集
@@ -39,6 +40,7 @@ class MultimodalHDF5Dataset(Dataset):
             load_modalities: 要加载的模态列表
             cache_size: 缓存大小
             memory_map: 是否使用内存映射
+            selected_classes: 选择的类别列表（类别名称或类别ID）
         """
         self.hdf5_path = Path(hdf5_path)
         self.split = split
@@ -46,6 +48,7 @@ class MultimodalHDF5Dataset(Dataset):
         self.load_modalities = load_modalities
         self.cache_size = cache_size
         self.memory_map = memory_map
+        self.selected_classes = selected_classes
         
         # 验证文件存在
         if not self.hdf5_path.exists():
@@ -53,6 +56,9 @@ class MultimodalHDF5Dataset(Dataset):
         
         # 打开HDF5文件并验证分割
         self._validate_dataset()
+        
+        # 过滤类别（如果指定）
+        self._filter_classes()
         
         # 缓存字典
         self._cache = {}
@@ -89,16 +95,82 @@ class MultimodalHDF5Dataset(Dataset):
             
             # 获取类别信息
             if 'class_map' in f.attrs:
-                self.class_map = eval(f.attrs['class_map'])
+                try:
+                    self.class_map = eval(f.attrs['class_map'])
+                except:
+                    # 如果解析失败，使用默认类别映射
+                    self.class_map = self._get_default_class_map()
             else:
-                # 从标签推断类别数
-                unique_labels = np.unique(split_group['labels'][:])
-                self.class_map = {f"class_{i}": i for i in unique_labels}
+                # 使用默认类别映射
+                self.class_map = self._get_default_class_map()
             
             self.num_classes = len(self.class_map)
             
             logger.info(f"数据形状: {self.shapes}")
             logger.info(f"类别数: {self.num_classes}")
+    
+    def _get_default_class_map(self):
+        """获取默认的类别映射"""
+        return {
+            'CG': 0, 'IG': 1, 'PS3': 2, 'PS6': 3, 'PS10': 4, 'QDDB': 5,
+            'QZQG': 6, 'SG': 7, 'TP': 8, 'TS': 9, 'YMXH': 10, 'YXXB': 11
+        }
+    
+    def _filter_classes(self):
+        """根据选择的类别过滤数据集"""
+        if self.selected_classes is None:
+            # 不过滤，使用所有样本
+            self.valid_indices = np.arange(self.length)
+            self.original_length = self.length
+            return
+        
+        # 读取所有标签
+        with h5py.File(self.hdf5_path, 'r') as f:
+            all_labels = f[self.split]['labels'][:]
+        
+        # 转换选择的类别为标签ID
+        if isinstance(self.selected_classes[0], str):
+            # 如果是类别名称，转换为ID
+            selected_label_ids = []
+            for class_name in self.selected_classes:
+                if class_name in self.class_map:
+                    selected_label_ids.append(self.class_map[class_name])
+                else:
+                    raise ValueError(f"未知类别名称: {class_name}")
+        else:
+            # 如果是类别ID，直接使用
+            selected_label_ids = list(self.selected_classes)
+        
+        # 找到匹配的样本索引
+        self.valid_indices = []
+        for i, label in enumerate(all_labels):
+            if label in selected_label_ids:
+                self.valid_indices.append(i)
+        
+        self.valid_indices = np.array(self.valid_indices)
+        self.original_length = self.length
+        self.length = len(self.valid_indices)
+        
+        # 更新类别映射（重新编号）
+        if len(selected_label_ids) < len(self.class_map):
+            # 创建新的类别映射
+            old_to_new = {old_id: new_id for new_id, old_id in enumerate(sorted(selected_label_ids))}
+            
+            # 更新class_map
+            new_class_map = {}
+            for class_name, old_id in self.class_map.items():
+                if old_id in old_to_new:
+                    new_class_map[class_name] = old_to_new[old_id]
+            
+            self.class_map = new_class_map
+            self.num_classes = len(selected_label_ids)
+            self.label_mapping = old_to_new  # 保存标签映射关系
+        
+        logger.info(f"类别过滤完成:")
+        logger.info(f"  原始样本数: {self.original_length}")
+        logger.info(f"  过滤后样本数: {self.length}")
+        logger.info(f"  选择的类别: {self.selected_classes}")
+        logger.info(f"  更新后的类别映射: {self.class_map}")
     
     def __len__(self) -> int:
         return self.length
@@ -136,6 +208,9 @@ class MultimodalHDF5Dataset(Dataset):
     
     def _load_sample(self, idx: int) -> Dict[str, torch.Tensor]:
         """从HDF5文件加载单个样本"""
+        # 如果有类别过滤，使用映射后的真实索引
+        real_idx = self.valid_indices[idx] if hasattr(self, 'valid_indices') else idx
+        
         sample = {}
         
         # 配置HDF5访问参数
@@ -146,12 +221,21 @@ class MultimodalHDF5Dataset(Dataset):
             
             # 加载各模态数据
             for modality in self.load_modalities:
-                data = split_group[modality][idx]
+                data = split_group[modality][real_idx]
                 sample[modality] = torch.from_numpy(data.astype(np.float32))
             
             # 加载标签
-            sample['labels'] = torch.tensor(split_group['labels'][idx], dtype=torch.long)
-            sample['idx'] = torch.tensor(idx, dtype=torch.long)
+            original_label = split_group['labels'][real_idx]
+            
+            # 如果有标签映射，转换标签
+            if hasattr(self, 'label_mapping') and original_label in self.label_mapping:
+                mapped_label = self.label_mapping[original_label]
+            else:
+                mapped_label = original_label
+            
+            sample['labels'] = torch.tensor(mapped_label, dtype=torch.long)
+            sample['idx'] = torch.tensor(idx, dtype=torch.long)  # 使用逻辑索引
+            sample['real_idx'] = torch.tensor(real_idx, dtype=torch.long)  # 保存真实索引
         
         return sample
     

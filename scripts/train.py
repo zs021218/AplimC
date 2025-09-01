@@ -44,7 +44,7 @@ def load_config(config_path: str) -> ModelConfig:
         return ModelConfig.from_file(config_path)
 
 
-def create_data_loaders(config: ModelConfig, data_path: str, full_config: dict = None):
+def create_data_loaders(config: ModelConfig, data_path: str, full_config: dict = None, selected_classes: list = None):
     """创建数据加载器"""
     # 提取数据增强配置
     transform_config = full_config.get('data_augmentation', {}) if full_config else {}
@@ -57,7 +57,8 @@ def create_data_loaders(config: ModelConfig, data_path: str, full_config: dict =
         num_workers=config.num_workers,
         balanced=True,
         use_cache=True,
-        transform_config=transform_config  # 传递数据增强配置
+        transform_config=transform_config,  # 传递数据增强配置
+        selected_classes=selected_classes  # 传递类别过滤参数
     )
     
     # 验证数据加载器
@@ -68,7 +69,8 @@ def create_data_loaders(config: ModelConfig, data_path: str, full_config: dict =
         num_workers=config.num_workers,
         balanced=False,
         use_cache=True,
-        transform_config=transform_config  # 验证时也传递配置（但只会用标准化）
+        transform_config=transform_config,  # 验证时也传递配置（但只会用标准化）
+        selected_classes=selected_classes  # 验证数据也应该过滤相同类别
     )
     
     return train_loader, val_loader
@@ -130,6 +132,14 @@ def main():
         choices=['stokes', 'fluorescence', 'images'],
         default=None,
         help='使用的模态（覆盖配置文件）'
+    )
+    
+    # 类别选择
+    parser.add_argument(
+        '--classes',
+        nargs='+',
+        default=None,
+        help='选择特定类别进行训练（类别名称，如 CG IG PS3，或类别ID，如 0 1 2）'
     )
     
     # 其他选项
@@ -198,13 +208,30 @@ def main():
     if args.modalities is not None:
         config.modalities = args.modalities
     
+    # 处理类别选择
+    selected_classes = None
+    if args.classes is not None:
+        # 尝试转换为整数（类别ID）
+        try:
+            selected_classes = [int(cls) for cls in args.classes]
+            logger.info(f"选择的类别ID: {selected_classes}")
+        except ValueError:
+            # 如果转换失败，则作为类别名称处理
+            selected_classes = args.classes
+            logger.info(f"选择的类别名称: {selected_classes}")
+    
     logger.info(f"模型配置: {config}")
     
     # 创建数据加载器
     logger.info(f"加载数据: {args.data}")
-    train_loader, val_loader = create_data_loaders(config, args.data, full_config_dict)  # 传递完整配置
+    train_loader, val_loader = create_data_loaders(config, args.data, full_config_dict, selected_classes)  # 传递完整配置和类别选择
     logger.info(f"训练样本数: {len(train_loader.dataset)}")
     logger.info(f"验证样本数: {len(val_loader.dataset)}")
+    
+    # 如果选择了特定类别，需要更新模型配置中的类别数
+    if selected_classes is not None:
+        config.num_classes = train_loader.dataset.num_classes
+        logger.info(f"更新类别数: {config.num_classes}")
     
     # 创建训练器
     trainer = MultimodalTrainer(config, device=device)

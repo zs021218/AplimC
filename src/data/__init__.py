@@ -4,7 +4,7 @@
 支持大规模数据集的高效加载、平衡采样和内存优化
 """
 
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Union
 
 # 核心数据加载类
 from .dataset import (
@@ -108,6 +108,7 @@ def create_default_dataloader(
     balanced: bool = True,
     use_cache: bool = True,
     transform_config: Dict = None,  # 添加数据增强配置参数
+    selected_classes: Optional[Union[List[str], List[int]]] = None,  # 添加类别过滤参数
     **kwargs
 ):
     """
@@ -121,6 +122,7 @@ def create_default_dataloader(
         balanced: 是否使用平衡采样
         use_cache: 是否使用缓存
         transform_config: 数据增强配置字典
+        selected_classes: 选择的类别列表（类别名称或类别ID）
         **kwargs: 其他参数
     
     Returns:
@@ -134,7 +136,8 @@ def create_default_dataloader(
         split=split,
         cache_size=kwargs.get('cache_size', 1000) if use_cache else 0,
         memory_map=kwargs.get('memory_map', True),
-        transform=get_train_transforms(transform_config) if split == 'train' else get_val_transforms(transform_config)
+        transform=get_train_transforms(transform_config) if split == 'train' else get_val_transforms(transform_config),
+        selected_classes=selected_classes  # 添加类别过滤参数
     )
     
     # 选择数据加载器创建函数
